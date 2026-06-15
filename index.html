@@ -677,7 +677,7 @@
       "https://overpass.openstreetmap.ru/api/interpreter"
     ];
     const FALLBACK_BEACHES_URL = "skane-fallback.tsv";
-    const CACHE_KEY = "skane-bad-ranking-cache-v5";
+    const CACHE_KEY = "skane-bad-ranking-cache-v10";
     const CACHE_KEYS = [CACHE_KEY, "skane-bad-ranking-cache-v4", "skane-bad-ranking-cache-v3", "skane-bad-ranking-cache-v2", "skane-bad-ranking-cache-v1"];
     const FORCE_OFFLINE = new URLSearchParams(location.search).has("offline");
     const FORCE_FALLBACK = new URLSearchParams(location.search).has("fallback");
@@ -761,10 +761,19 @@
       if (FORCE_OFFLINE) throw new Error("Offline-testläge");
       let lastError = null;
       for (let attempt = 0; attempt < 3; attempt += 1) {
-        const response = await fetch(url);
-        if (response.ok) return response.json();
-        lastError = new Error(`${response.status} ${response.statusText}`);
-        if (![429, 500, 502, 503, 504].includes(response.status)) break;
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 18000);
+        let response = null;
+        try {
+          response = await fetch(url, { signal: controller.signal });
+          if (response.ok) return response.json();
+          lastError = new Error(`${response.status} ${response.statusText}`);
+          if (![429, 500, 502, 503, 504].includes(response.status)) break;
+        } catch (error) {
+          lastError = error;
+        } finally {
+          clearTimeout(timer);
+        }
         await sleep(700 + attempt * 900);
       }
       throw lastError;
@@ -871,7 +880,7 @@
         loadProfiles(beaches),
         loadWaterForecasts(beaches),
         loadOpenMeteoBatch(beaches, WEATHER_BASE, {
-          hourly: "temperature_2m,precipitation,weather_code,wind_speed_10m,wind_gusts_10m",
+          hourly: "temperature_2m,precipitation,weather_code,cloud_cover,wind_speed_10m,wind_gusts_10m",
           wind_speed_unit: "ms"
         }, "weather"),
         loadOpenMeteoBatch(beaches, MARINE_BASE, {
@@ -901,7 +910,7 @@
     }
 
     async function loadOpenMeteoBatch(beaches, base, params, assignKey) {
-      const chunkSize = 25;
+      const chunkSize = assignKey === "weather" ? 10 : 25;
       for (let i = 0; i < beaches.length; i += chunkSize) {
         const chunk = beaches.slice(i, i + chunkSize);
         const qs = new URLSearchParams({
@@ -911,11 +920,37 @@
           timezone: "Europe/Stockholm",
           ...params
         });
-        const data = await getJson(`${base}?${qs}`).catch(() => null);
-        const rows = Array.isArray(data) ? data : (data ? [data] : []);
-        chunk.forEach((beach, idx) => {
-          beach[assignKey] = rows[idx] || null;
-        });
+        try {
+          const data = await getJson(`${base}?${qs}`);
+          const rows = Array.isArray(data) ? data : (data ? [data] : []);
+          if (!rows.length || rows.some((row) => !row?.hourly)) throw new Error("Open-Meteo batch saknade hourly-data");
+          chunk.forEach((beach, idx) => {
+            beach[assignKey] = rows[idx] || null;
+          });
+        } catch (batchError) {
+          if (assignKey !== "weather") {
+            console.warn(`${assignKey} batch failed`, batchError);
+            chunk.forEach((beach) => {
+              beach[assignKey] = null;
+            });
+            continue;
+          }
+          console.warn(`${assignKey} batch failed; trying single-location requests`, batchError);
+          await mapLimit(chunk, 3, async (beach) => {
+            const singleQs = new URLSearchParams({
+              latitude: beach.lat.toFixed(5),
+              longitude: beach.lon.toFixed(5),
+              forecast_days: "3",
+              timezone: "Europe/Stockholm",
+              ...params
+            });
+            beach[assignKey] = await getJson(`${base}?${singleQs}`).catch((error) => {
+              console.warn(`${assignKey} single-location failed for ${beach.name}`, error);
+              return null;
+            });
+          });
+        }
+        if (i + chunkSize < beaches.length) await sleep(250);
       }
     }
 
@@ -1297,7 +1332,8 @@
           time: new Date(time),
           air: hourly.temperature_2m?.[i],
           rain: hourly.precipitation?.[i] ?? 0,
-          code: hourly.weather_code?.[i],
+          code: parseNumber(hourly.weather_code?.[i] ?? hourly.weathercode?.[i]),
+          cloud: parseNumber(hourly.cloud_cover?.[i] ?? hourly.cloudcover?.[i]),
           wind: hourly.wind_speed_10m?.[i],
           gust: hourly.wind_gusts_10m?.[i]
         }));
@@ -1310,11 +1346,12 @@
         const thunder = items.some((x) => THUNDER_CODES.has(x.code));
         const rainyCode = items.some((x) => RAIN_CODES.has(x.code));
         const weatherCode = worstWeatherCode(items.map((x) => x.code));
+        const cloud = maxFinite(items.map((x) => x.cloud));
         const air = maxFinite(items.map((x) => x.air));
         const wind = maxFinite(items.map((x) => x.wind));
         const gust = maxFinite(items.map((x) => x.gust));
         if (!Number.isFinite(air)) continue;
-        const candidate = { arrive: new Date(t), leave: end, air, rain, preRain, thunder, rainyCode, weatherCode, wind, gust };
+        const candidate = { arrive: new Date(t), leave: end, air, rain, preRain, thunder, rainyCode, weatherCode, cloud, wind, gust };
         candidate.weatherScore = scoreWeather(candidate);
         if (!best || candidate.weatherScore > best.weatherScore) best = candidate;
       }
@@ -1348,19 +1385,33 @@
       return codes.filter(Number.isFinite).sort((a, b) => weatherSeverity(b) - weatherSeverity(a))[0] ?? null;
     }
 
-    function weatherLabel(code) {
-      if (code === null || code === undefined) return "Okänt";
-      if (THUNDER_CODES.has(code)) return "Åska";
-      if ([65, 67, 82].includes(code)) return "Kraftigt regn";
-      if ([63, 66, 81].includes(code)) return "Regn";
-      if ([61, 80].includes(code)) return "Lätt regn";
-      if ([51, 53, 55, 56, 57].includes(code)) return "Duggregn";
-      if ([45, 48].includes(code)) return "Dimma";
-      if (code === 3) return "Mulet";
-      if (code === 2) return "Halvklart";
-      if (code === 1) return "Mest klart";
-      if (code === 0) return "Klart";
-      return `Väderkod ${code}`;
+    function weatherLabel(input) {
+      const w = typeof input === "object" && input !== null ? input : { weatherCode: input };
+      const code = w.weatherCode;
+      if (w.thunder) return "Åska";
+      if ((w.rain || 0) >= 4) return "Kraftigt regn";
+      if ((w.rain || 0) >= 1 || w.rainyCode) return "Regn";
+      if ((w.rain || 0) > 0) return "Lätt regn";
+      if (Number.isFinite(code)) {
+        if (THUNDER_CODES.has(code)) return "Åska";
+        if ([65, 67, 82].includes(code)) return "Kraftigt regn";
+        if ([63, 66, 81].includes(code)) return "Regn";
+        if ([61, 80].includes(code)) return "Lätt regn";
+        if ([51, 53, 55, 56, 57].includes(code)) return "Duggregn";
+        if ([45, 48].includes(code)) return "Dimma";
+        if (code === 3) return "Mulet";
+        if (code === 2) return "Halvklart";
+        if (code === 1) return "Mest klart";
+        if (code === 0) return "Klart";
+        return `Väderkod ${code}`;
+      }
+      if (Number.isFinite(w.cloud)) {
+        if (w.cloud >= 75) return "Mulet";
+        if (w.cloud >= 35) return "Halvklart";
+        if (w.cloud >= 15) return "Mest klart";
+        return "Klart";
+      }
+      return "Uppehåll";
     }
 
     function scoreWeather(w) {
@@ -1370,11 +1421,42 @@
       return airScore * .42 + rainScore * .42 + windScore * .16;
     }
 
-    function fallbackWeatherWindow(dayIndex, drive, stayHours) {
+    function fallbackWeatherWindow(beach, dayIndex, drive, stayHours) {
       const now = new Date();
       const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() + dayIndex, 12, 0, 0);
       const arrive = dayIndex === 0 ? new Date(Math.max(now.getTime() + drive * 60000, dayStart.getTime())) : new Date(dayStart.getTime() + drive * 60000);
       const leave = new Date(arrive.getTime() + stayHours * 3600000);
+      const hourly = beach.weather?.hourly;
+      if (hourly?.time) {
+        const allItems = hourly.time.map((time, i) => ({
+          time: new Date(time),
+          air: hourly.temperature_2m?.[i],
+          rain: hourly.precipitation?.[i] ?? 0,
+          code: parseNumber(hourly.weather_code?.[i] ?? hourly.weathercode?.[i]),
+          cloud: parseNumber(hourly.cloud_cover?.[i] ?? hourly.cloudcover?.[i]),
+          wind: hourly.wind_speed_10m?.[i],
+          gust: hourly.wind_gusts_10m?.[i]
+        }));
+        const items = allItems.filter((x) => x.time >= arrive && x.time < leave);
+        if (items.length) {
+          const rain = items.reduce((sum, x) => sum + (x.rain || 0), 0);
+          const preRain = allItems
+            .filter((x) => x.time >= dayStart && x.time < arrive)
+            .reduce((sum, x) => sum + (x.rain || 0), 0);
+          const thunder = items.some((x) => THUNDER_CODES.has(x.code));
+          const rainyCode = items.some((x) => RAIN_CODES.has(x.code));
+          const weatherCode = worstWeatherCode(items.map((x) => x.code));
+          const cloud = maxFinite(items.map((x) => x.cloud));
+          const air = maxFinite(items.map((x) => x.air));
+          const wind = maxFinite(items.map((x) => x.wind));
+          const gust = maxFinite(items.map((x) => x.gust));
+          if (Number.isFinite(air)) {
+            const candidate = { arrive, leave, air, rain, preRain, thunder, rainyCode, weatherCode, cloud, wind, gust, fallback: true };
+            candidate.weatherScore = scoreWeather(candidate);
+            return candidate;
+          }
+        }
+      }
       return {
         arrive,
         leave,
@@ -1384,6 +1466,7 @@
         thunder: false,
         rainyCode: false,
         weatherCode: null,
+        cloud: null,
         wind: 6,
         gust: 9,
         fallback: true,
@@ -1394,7 +1477,7 @@
     function scoreBeach(beach, cfg) {
       const from = STARTS[cfg.start];
       const drive = driveMinutes(from, beach);
-      const window = weatherWindow(beach, cfg.dayIndex, drive, cfg.stayHours) || fallbackWeatherWindow(cfg.dayIndex, drive, cfg.stayHours);
+      const window = weatherWindow(beach, cfg.dayIndex, drive, cfg.stayHours) || fallbackWeatherWindow(beach, cfg.dayIndex, drive, cfg.stayHours);
       const water = bestWaterTemp(beach, cfg.dayIndex, window.arrive.getHours(), window.leave.getHours());
       const waterTemp = water.value;
       if (!Number.isFinite(waterTemp)) return null;
@@ -1853,7 +1936,7 @@
         const row = scoreBeach(beach, { ...current, dayIndex });
         if (!row) return `${dayLabel(dayIndex)}: saknar vattentemperatur eller badfönster`;
         const thunder = row.window.thunder ? ", åska" : "";
-        return `${dayLabel(dayIndex)}: ${Math.round(row.score)} p, ${round(row.waterTemp)} C vatten, ${round(row.window.air)} C luft, ${round(row.window.rain)} mm regn, ${weatherLabel(row.window.weatherCode).toLowerCase()}${thunder}`;
+        return `${dayLabel(dayIndex)}: ${Math.round(row.score)} p, ${round(row.waterTemp)} C vatten, ${round(row.window.air)} C luft, ${round(row.window.rain)} mm regn, ${weatherLabel(row.window).toLowerCase()}${thunder}`;
       }).join(" · ");
     }
 
@@ -1896,7 +1979,7 @@
               <div class="fact"><b>${round(row.window.air)} C</b><span>Luft</span></div>
               <div class="fact"><b>${round(row.window.rain)} mm</b><span>Regn</span></div>
               <div class="fact"><b>${round(row.window.preRain)} mm</b><span>Regn före</span></div>
-              <div class="fact"><b>${escapeHtml(weatherLabel(row.window.weatherCode))}</b><span>Väder</span></div>
+              <div class="fact"><b>${escapeHtml(weatherLabel(row.window))}</b><span>Väder</span></div>
               <div class="fact"><b>${row.window.thunder ? "Ja" : "Nej"}</b><span>Åska</span></div>
               <div class="fact"><b>${round(row.window.wind)} m/s</b><span>Vind</span></div>
               <div class="fact"><b>${round(row.wave)} m</b><span>Vågor</span></div>
@@ -1931,7 +2014,7 @@
                   <div class="detail-box"><b>Vattenkvalitet</b>${escapeHtml(row.quality)}. ${escapeHtml(adviceText(b))}</div>
                   <div class="detail-box"><b>Datakoll</b>${escapeHtml(dataFlags)}.</div>
                   <div class="detail-box"><b>Kvalitetsrisk idag</b>${escapeHtml(qualityCaution(b, row.window))}</div>
-                  <div class="detail-box"><b>Väderläge</b>${escapeHtml(weatherLabel(row.window.weatherCode))} under valt badfönster. Åska: ${row.window.thunder ? "ja" : "nej"}, regn under bad ${round(row.window.rain)} mm, regn före bad ${round(row.window.preRain)} mm.</div>
+                  <div class="detail-box"><b>Väderläge</b>${escapeHtml(weatherLabel(row.window))} under valt badfönster. Åska: ${row.window.thunder ? "ja" : "nej"}, regn under bad ${round(row.window.rain)} mm, regn före bad ${round(row.window.preRain)} mm.</div>
                   <div class="detail-box"><b>Vattentemperatur</b>${round(row.waterTemp)} C. Källa: ${escapeHtml(waterSourceLabel(row))}.</div>
                   <div class="detail-box"><b>Senaste prov</b>${latestDate}. ${escapeHtml(sampleInfo)}. Rådata: E. coli ${escapeHtml(String(b.latestResult?.escherichiaColiPrefix || ""))}${escapeHtml(String(b.latestResult?.escherichiaColiCount ?? "-"))}, enterokocker ${escapeHtml(String(b.latestResult?.intestinalEnterococciPrefix || ""))}${escapeHtml(String(b.latestResult?.intestinalEnterococciCount ?? "-"))}. Alger: ${escapeHtml(b.latestResult?.algalIdText || "ej hittat")}.</div>
                   <div class="detail-box"><b>Klassning</b>${escapeHtml(classificationText(b))}</div>
@@ -2054,7 +2137,7 @@
         round(row.window.air),
         round(row.window.rain),
         round(row.window.preRain),
-        weatherLabel(row.window.weatherCode),
+        weatherLabel(row.window),
         row.window.thunder ? "ja" : "nej",
         round(row.window.wind),
         round(row.wave),
