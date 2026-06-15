@@ -1143,10 +1143,14 @@
     function dataQualityFlags(row) {
       const flags = [];
       const beach = row.beach;
+      const sampleTemp = parseNumber(beach.latestResult?.waterTemp);
       if (beach.advice.length) flags.push("aktiv avrådan");
       if (!beach.latestResult) flags.push("senaste prov saknas");
       if (Number.isFinite(row.sampleAge) && row.sampleAge > 21) flags.push(`prov ${row.sampleAge} dagar gammalt`);
       if (!classificationRows(beach).length) flags.push("klassningshistorik saknas");
+      if (row.waterSource === "HaV vattenprognos" && Number.isFinite(sampleTemp) && Number.isFinite(row.waterTemp) && Number.isFinite(row.sampleAge) && row.sampleAge <= 10 && sampleTemp - row.waterTemp >= 2.5) {
+        flags.push(`ovanligt låg vattenprognos jämfört med prov ${round(sampleTemp)} C för ${row.sampleAge} dagar sedan`);
+      }
       if (row.history?.repeatedWeak) flags.push(row.history.text);
       if (!Number.isFinite(row.waterTemp)) flags.push("vattentemperatur saknas");
       if (!beach.weather?.hourly || row.window?.fallback) flags.push("väderprognos saknas eller ofullständig");
@@ -1737,6 +1741,13 @@
       return tags.join(", ");
     }
 
+    function waterSourceShort(source) {
+      if (source === "HaV vattenprognos") return "HaV prognos";
+      if (source === "Open-Meteo Marine") return "Marine";
+      if (source === "Senaste vattenprov") return "Prov";
+      return source || "Saknas";
+    }
+
     function nearbyAmenityText(beach) {
       const amenities = toArray(beach.nearbyAmenities);
       if (!amenities.length) return "Ingen närliggande service hittades i OpenStreetMap inom cirka 800 meter.";
@@ -1848,7 +1859,7 @@
               <div class="score">${Math.round(row.score)} poäng</div>
             </div>
             <div class="facts">
-              <div class="fact"><b>${round(row.waterTemp)} C</b><span>Vatten</span></div>
+              <div class="fact"><b>${round(row.waterTemp)} C</b><span>Vatten, ${escapeHtml(waterSourceShort(row.waterSource))}</span></div>
               <div class="fact"><b>${round(row.window.air)} C</b><span>Luft</span></div>
               <div class="fact"><b>${round(row.window.rain)} mm</b><span>Regn</span></div>
               <div class="fact"><b>${round(row.window.preRain)} mm</b><span>Regn före</span></div>
