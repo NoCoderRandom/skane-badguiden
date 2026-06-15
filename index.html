@@ -597,6 +597,7 @@
           <option value="rain_asc">Minst regn</option>
           <option value="wind_asc">Minst vind</option>
           <option value="drive_asc">Kortast resa</option>
+          <option value="fresh_water_asc">Nyast vattendata</option>
           <option value="quality_desc">Bäst vattenkvalitet</option>
           <option value="service_desc">Mest service</option>
         </select>
@@ -610,6 +611,7 @@
           <option value="rain_asc">Minst regn</option>
           <option value="wind_asc">Minst vind</option>
           <option value="drive_asc">Kortast resa</option>
+          <option value="fresh_water_asc">Nyast vattendata</option>
           <option value="quality_desc">Bäst vattenkvalitet</option>
           <option value="service_desc">Mest service</option>
         </select>
@@ -623,6 +625,7 @@
           <option value="rain_asc">Minst regn</option>
           <option value="wind_asc">Minst vind</option>
           <option value="drive_asc">Kortast resa</option>
+          <option value="fresh_water_asc">Nyast vattendata</option>
           <option value="quality_desc">Bäst vattenkvalitet</option>
           <option value="service_desc">Mest service</option>
         </select>
@@ -1597,6 +1600,7 @@
       rain_asc: "Minst regn",
       wind_asc: "Minst vind",
       drive_asc: "Kortast resa",
+      fresh_water_asc: "Nyast vattendata",
       quality_desc: "Bäst vattenkvalitet",
       service_desc: "Mest service"
     };
@@ -1607,6 +1611,12 @@
       if (key === "rain_asc") return row.window.rain + row.window.preRain * .35 + (row.window.thunder ? 99 : 0);
       if (key === "wind_asc") return (row.window.wind || 0) + Math.max(0, (row.window.gust || 0) - 8) * .25 + (row.wave || 0) * 1.5;
       if (key === "drive_asc") return row.drive;
+      if (key === "fresh_water_asc") {
+        if (row.waterSource === "HaV vattenprognos" || row.waterSource === "Open-Meteo Marine") return 0;
+        if (Number.isFinite(row.waterSourceAgeHours)) return row.waterSourceAgeHours;
+        if (Number.isFinite(row.sampleAge)) return row.sampleAge * 24;
+        return Number.POSITIVE_INFINITY;
+      }
       if (key === "quality_desc") return row.breakdown.qualityScore - row.breakdown.weakHistoryPenalty - (row.beach.advice.length ? 80 : 0);
       if (key === "service_desc") return row.breakdown.serviceBonus - row.breakdown.missingServicePenalty;
       return row.score;
