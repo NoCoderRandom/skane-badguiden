@@ -1521,7 +1521,7 @@
       const best = days.filter((item) => item.row).sort((a, b) => b.row.score - a.row.score)[0];
       const chips = days.map(({ dayIndex, row }) => {
         if (!row) {
-          return `<div class="day-chip"><b>${dayLabel(dayIndex)}</b><span>Saknar komplett badfönster.</span></div>`;
+          return `<div class="day-chip"><b>${dayLabel(dayIndex)}</b><span>Saknar vattentemperatur eller komplett badfönster.</span></div>`;
         }
         const marker = best && best.dayIndex === dayIndex ? "Bästa dag: " : "";
         return `<div class="day-chip"><b>${marker}${dayLabel(dayIndex)} · ${Math.round(row.score)} p</b><span>${escapeHtml(row.beach.name)}, ${round(row.waterTemp)} C vatten, ${round(row.window.air)} C luft, ${round(row.window.rain)} mm regn, ${round(row.window.wind)} m/s vind.</span></div>`;
@@ -1851,7 +1851,7 @@
       const current = cfg();
       return [0, 1, 2].map((dayIndex) => {
         const row = scoreBeach(beach, { ...current, dayIndex });
-        if (!row) return `${dayLabel(dayIndex)}: saknar badfönster`;
+        if (!row) return `${dayLabel(dayIndex)}: saknar vattentemperatur eller badfönster`;
         const thunder = row.window.thunder ? ", åska" : "";
         return `${dayLabel(dayIndex)}: ${Math.round(row.score)} p, ${round(row.waterTemp)} C vatten, ${round(row.window.air)} C luft, ${round(row.window.rain)} mm regn, ${weatherLabel(row.window.weatherCode).toLowerCase()}${thunder}`;
       }).join(" · ");
