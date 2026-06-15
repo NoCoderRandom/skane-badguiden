@@ -330,38 +330,6 @@
       white-space: nowrap;
     }
 
-    .quick-table {
-      overflow-x: auto;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      background: #fff;
-    }
-
-    .quick-table table {
-      width: 100%;
-      border-collapse: collapse;
-      min-width: 760px;
-    }
-
-    .quick-table th,
-    .quick-table td {
-      padding: 9px;
-      border-bottom: 1px solid var(--line);
-      text-align: left;
-      font-size: .88rem;
-      vertical-align: top;
-    }
-
-    .quick-table th {
-      color: var(--muted);
-      font-size: .74rem;
-      text-transform: uppercase;
-    }
-
-    .quick-table tr:last-child td {
-      border-bottom: 0;
-    }
-
     .facts {
       display: grid;
       grid-template-columns: repeat(6, minmax(82px, 1fr));
@@ -622,7 +590,6 @@
           <button id="csvBtn" class="secondary" type="button">Exportera CSV</button>
         </div>
         <p id="sortSummary" class="sort-help">Sortering: bästa badläge.</p>
-        <div id="quickTopList" class="quick-table"></div>
         <div id="beachList" class="list">
           <div class="empty">Laddar...</div>
         </div>
@@ -1820,35 +1787,6 @@
         .filter((row) => rowMatchesSearch(row, options.search));
     }
 
-    function renderQuickTopList(rows) {
-      const visibleRows = visibleRowsForFilters(rows).slice(0, 10);
-      if (!visibleRows.length) {
-        $("quickTopList").innerHTML = `<div class="empty">Ingen snabbtopplista för aktuella filter.</div>`;
-        return;
-      }
-      $("quickTopList").innerHTML = `
-        <table>
-          <thead>
-            <tr><th>#</th><th>Strand</th><th>Poäng</th><th>Vatten</th><th>Luft</th><th>Regn</th><th>Vind m/s</th><th>Åk</th><th>Badråd</th></tr>
-          </thead>
-          <tbody>
-            ${visibleRows.map((row, index) => `
-              <tr>
-                <td>${index + 1}</td>
-                <td><b>${escapeHtml(row.beach.name)}</b><br>${escapeHtml(row.beach.municipality)} · ${escapeHtml(categoryTitle(beachCategory(row.beach)))}</td>
-                <td>${Math.round(row.score)}</td>
-                <td>${round(row.waterTemp)} C</td>
-                <td>${round(row.window.air)} C</td>
-                <td>${round(row.window.rain)} mm</td>
-                <td>${round(row.window.wind)} m/s</td>
-                <td>${formatTime(row.departAt)}</td>
-                <td>${escapeHtml(swimAdvice(row).label)}</td>
-              </tr>
-            `).join("")}
-          </tbody>
-        </table>`;
-    }
-
     function renderMunicipalityOverview(rows) {
       const visibleRows = visibleRowsForFilters(rows);
       if (!visibleRows.length) {
@@ -2214,7 +2152,6 @@
       const visibleRows = visibleRowsForFilters(rows);
       state.rows = rows;
       renderBest(visibleRows);
-      renderQuickTopList(rows);
       renderRows(rows);
       renderMunicipalityOverview(rows);
       renderNotes(rows, state.raw.length, removedRows, unscoredRemovedCount, driveExcludedCount);
