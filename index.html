@@ -582,11 +582,6 @@
           <option value="4">4 timmar</option>
         </select>
       </label>
-      <label>Visa
-        <select id="limitSelect">
-          <option value="100">Topp 100</option>
-        </select>
-      </label>
       <label>Kategori
         <select id="categoryFilter">
           <option value="all">Alla</option>
@@ -1549,7 +1544,7 @@
         start: $("startSelect").value,
         maxDrive: Number($("maxDrive").value),
         stayHours: Number($("stayHours").value),
-        limit: Number($("limitSelect").value),
+        limit: 100,
         categoryFilter: $("categoryFilter").value,
         sortKeys: [$("sortPrimary").value, $("sortSecondary").value, $("sortTertiary").value].filter((key) => key && key !== "none"),
         search: $("searchInput").value.trim().toLowerCase()
@@ -2315,7 +2310,7 @@
 
     $("refreshBtn").addEventListener("click", refresh);
     let searchRenderTimer = null;
-    ["daySelect", "startSelect", "maxDrive", "stayHours", "limitSelect", "categoryFilter", "sortPrimary", "sortSecondary", "sortTertiary"].forEach((id) => {
+    ["daySelect", "startSelect", "maxDrive", "stayHours", "categoryFilter", "sortPrimary", "sortSecondary", "sortTertiary"].forEach((id) => {
       $(id).addEventListener("change", () => {
         updateUrlState();
         if (state.raw.length) rankAndRender();
