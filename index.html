@@ -488,19 +488,6 @@
       font-weight: 900;
     }
 
-    .source-list {
-      display: grid;
-      gap: 9px;
-      margin: 0;
-      padding: 0;
-      list-style: none;
-      color: var(--muted);
-      font-size: .9rem;
-      line-height: 1.4;
-    }
-
-    .source-list a { color: var(--sea); font-weight: 900; }
-
     .toast {
       position: fixed;
       left: 50%;
@@ -1678,7 +1665,8 @@
       const current = cfg();
       return [0, 1, 2].map((dayIndex) => {
         const ranking = evaluateRanking({ ...current, dayIndex });
-        return ranking.rows[0] ? { dayIndex, row: ranking.rows[0] } : { dayIndex, row: null };
+        const visible = visibleRowsForFilters(ranking.rows);
+        return visible[0] ? { dayIndex, row: visible[0] } : { dayIndex, row: null };
       });
     }
 
@@ -1699,7 +1687,8 @@
       const current = cfg();
       return [2, 3, 4].map((stayHours) => {
         const ranking = evaluateRanking({ ...current, stayHours });
-        return ranking.rows[0] ? { stayHours, row: ranking.rows[0] } : { stayHours, row: null };
+        const visible = visibleRowsForFilters(ranking.rows);
+        return visible[0] ? { stayHours, row: visible[0] } : { stayHours, row: null };
       });
     }
 
@@ -1743,8 +1732,8 @@
         </div>`;
       $("bestCard").innerHTML = `
         ${winnerBlock(overall, "Överst i aktuell sortering")}
-        ${winnerBlock(sea, "Överst bland havsstränder")}
-        ${winnerBlock(lake, "Överst bland sjöstränder")}
+        ${sea ? winnerBlock(sea, "Överst bland havsstränder") : ""}
+        ${lake ? winnerBlock(lake, "Överst bland sjöstränder") : ""}
         ${renderDayComparison()}
         ${renderStayComparison()}`;
     }
@@ -2121,13 +2110,15 @@
     }
 
     function renderNotes(rows, allCount, removedRows = [], unscoredRemovedCount = 0, driveExcludedCount = 0) {
-      const seaCount = rows.filter((row) => beachCategory(row.beach) === "sea").length;
-      const lakeCount = rows.filter((row) => beachCategory(row.beach) === "lake").length;
+      const visibleRows = visibleRowsForFilters(rows);
+      const seaCount = visibleRows.filter((row) => beachCategory(row.beach) === "sea").length;
+      const lakeCount = visibleRows.filter((row) => beachCategory(row.beach) === "lake").length;
       const removedCount = removedRows.length;
       const filter = cfg().categoryFilter;
       const search = cfg().search;
       const visibleCount = (filter === "all" ? rows : rows.filter((row) => beachCategory(row.beach) === filter))
         .filter((row) => rowMatchesSearch(row, search)).length;
+      const exportCount = visibleRows.length;
       const removedExamples = removedRows
         .slice()
         .sort((a, b) => a.excludeScore - b.excludeScore)
@@ -2152,7 +2143,7 @@
       $("runNotes").innerHTML = `
         <p><b>Senast uppdaterad:</b> ${new Date().toLocaleString("sv-SE")}.</p>
         <p><b>Datastatus:</b> ${escapeHtml(sourceText)}</p>
-        <p><b>Urval:</b> ${state.skaneCount || allCount} skånska badplatser hittades. Sidan analyserar ${allCount}; ${escapeHtml(limitText)}. Den visar/exporterar ${rows.length} stränder i aktuell sortering: ${seaCount} havsstränder och ${lakeCount} sjöstränder/inlandsvatten.</p>
+        <p><b>Urval:</b> ${state.skaneCount || allCount} skånska badplatser hittades. Sidan analyserar ${allCount}; ${escapeHtml(limitText)}. Den visar/exporterar ${exportCount} stränder i aktuell vy: ${seaCount} havsstränder och ${lakeCount} sjöstränder/inlandsvatten.</p>
         <p><b>Filter och sortering:</b> ${filter === "all" ? "alla kategorier" : `${categoryTitle(filter)}`}${search ? `, sökning "${escapeHtml(search)}"` : ""}; sorterat på ${escapeHtml(sortSummaryText())}. ${visibleCount} kort syns.</p>
         ${removedCount ? `<p><b>Bortsorterat:</b> ${removedCount} bad hålls utanför topp 100 på grund av svagare kvalitet, service, historik eller väder.</p>` : ""}
         ${removedExampleHtml}
@@ -2220,14 +2211,15 @@
       const options = cfg();
       const from = STARTS[options.start];
       const { rows, scored, removedRows, unscoredRemovedCount, driveExcludedCount } = evaluateRanking(options);
+      const visibleRows = visibleRowsForFilters(rows);
       state.rows = rows;
-      renderBest(rows);
+      renderBest(visibleRows);
       renderQuickTopList(rows);
       renderRows(rows);
       renderAdviceOverview(rows);
       renderMunicipalityOverview(rows);
       renderNotes(rows, state.raw.length, removedRows, unscoredRemovedCount, driveExcludedCount);
-      buildCsv(rows);
+      buildCsv(visibleRows);
       $("sortSummary").textContent = `Sortering: ${sortSummaryText(options)}. Kvalitetsspärren och topp 100-urvalet gäller fortfarande innan listan sorteras.`;
       $("countPill").textContent = `${rows.length} stränder`;
       $("statusPill").className = state.sourceMode === "live" ? "pill good" : "pill warn";
