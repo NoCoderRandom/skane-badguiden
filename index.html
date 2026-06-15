@@ -365,6 +365,21 @@
       gap: 6px;
     }
 
+    .warnings {
+      display: grid;
+      gap: 6px;
+    }
+
+    .warning {
+      border: 1px solid #f0b6ba;
+      background: #ffe2e3;
+      color: var(--bad);
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-weight: 900;
+      line-height: 1.25;
+    }
+
     .quick-info {
       display: grid;
       gap: 5px;
@@ -524,7 +539,7 @@
       </label>
       <label>Sortering 1
         <select id="sortPrimary">
-          <option value="score_desc">Bästa badläge</option>
+          <option value="score_desc">Bästa bad</option>
           <option value="water_desc">Varmast vatten</option>
           <option value="air_desc">Varmast luft</option>
           <option value="rain_asc">Minst regn</option>
@@ -538,7 +553,7 @@
       <label>Sortering 2
         <select id="sortSecondary">
           <option value="none">Ingen</option>
-          <option value="score_desc">Bästa badläge</option>
+          <option value="score_desc">Bästa bad</option>
           <option value="water_desc">Varmast vatten</option>
           <option value="air_desc">Varmast luft</option>
           <option value="rain_asc">Minst regn</option>
@@ -552,7 +567,7 @@
       <label>Sortering 3
         <select id="sortTertiary">
           <option value="none">Ingen</option>
-          <option value="score_desc">Bästa badläge</option>
+          <option value="score_desc">Bästa bad</option>
           <option value="water_desc">Varmast vatten</option>
           <option value="air_desc">Varmast luft</option>
           <option value="rain_asc">Minst regn</option>
@@ -589,7 +604,7 @@
           <h2>Bästa stränderna med vattentemperatur</h2>
           <button id="csvBtn" class="secondary" type="button">Exportera CSV</button>
         </div>
-        <p id="sortSummary" class="sort-help">Sortering: bästa badläge.</p>
+        <p id="sortSummary" class="sort-help">Sortering: bästa bad.</p>
         <div id="beachList" class="list">
           <div class="empty">Laddar...</div>
         </div>
@@ -1117,7 +1132,7 @@
 
     function qualityScore(beach) {
       const text = qualityText(beach).toLowerCase();
-      if (beach.advice.length || text.includes("otjän")) return 0;
+      if (beach.advice.length || text.includes("otjän") || text.includes("avrådan")) return 0;
       if (text.includes("otillgänglig") || text.includes("ej hämtad")) return 0;
       if (text.includes("anmärkning") || text.includes("tillfredsställande")) return 55;
       if (text.includes("god")) return 82;
@@ -1459,6 +1474,15 @@
       };
     }
 
+    function rainDownrankPenalty(window) {
+      const rain = window?.rain || 0;
+      const preRain = window?.preRain || 0;
+      if (window?.thunder) return 220;
+      const directRain = rain > 0 || window?.rainyCode ? 70 + rain * 85 + (window?.rainyCode ? 35 : 0) : 0;
+      const earlierRain = preRain >= 3 ? 20 + preRain * 5 : 0;
+      return directRain + earlierRain;
+    }
+
     function scoreBeach(beach, cfg) {
       const from = STARTS[cfg.start];
       const drive = driveMinutes(from, beach);
@@ -1471,12 +1495,11 @@
       const sampleAge = daysSince(beach.latestResult?.takenAt);
       const qualityLabel = qualityText(beach);
       const qualityLower = qualityLabel.toLowerCase();
-      if (beach.advice.length || qualityLower.includes("otjän")) return null;
       if (!beach.latestResult || !Number.isFinite(sampleAge) || sampleAge > 90) return null;
       const wave = waveFor(beach, cfg.dayIndex, window.arrive.getHours(), window.leave.getHours());
       const waterScore = clamp((waterTemp - 8) * 7.4, 0, 100);
       const airScore = clamp(100 - Math.abs((window.air || 0) - 25) * 6, 0, 100);
-      const rainScore = window.thunder ? 0 : clamp(100 - (window.rain || 0) * 45 - (window.rainyCode ? 18 : 0), 0, 100);
+      const rainScore = window.thunder ? 0 : clamp(100 - (window.rain || 0) * 130 - (window.preRain || 0) * 12 - (window.rainyCode ? 35 : 0), 0, 100);
       const windScore = clamp(100 - (window.wind || 0) * 9.5 - Math.max(0, (window.gust || 0) - 8.5) * 4.3 - (wave || 0) * 16, 0, 100);
       const qScore = qualityScore(beach);
       const services = serviceTags(beach);
@@ -1486,15 +1509,13 @@
       const repeatedHistoryPenalty = history.repeatedWeak ? 14 : 0;
       const weakHistoryPenalty = clamp(weakClassificationPenalty(beach) + repeatedHistoryPenalty, 0, 45);
       const drivePenalty = Math.max(0, drive - 75) * .18;
-      const advicePenalty = beach.advice.length ? 80 : 0;
+      const advicePenalty = beach.advice.length || qualityLower.includes("otjän") ? 180 : 0;
       const weatherFallbackPenalty = window.fallback ? 20 : 0;
       const currentQualityPenalty = sampleAge > 30 || qualityLower.includes("otillgänglig") ? 55 : 0;
       const samplePenalty = Number.isFinite(sampleAge) ? clamp((sampleAge - 14) * .65, 0, 35) : 35;
-      const rainQualityPenalty = (window.rain || 0) >= 2 || (window.preRain || 0) >= 3
-        ? 5 + Math.min(5, (window.preRain || 0) * .7)
-        : 0;
+      const rainQualityPenalty = rainDownrankPenalty(window);
       const score = waterScore * .35 + airScore * .25 + rainScore * .20 + windScore * .10 + qScore * .10 + serviceScore - drivePenalty - advicePenalty - samplePenalty - rainQualityPenalty - missingServicePenalty - weakHistoryPenalty - weatherFallbackPenalty - currentQualityPenalty;
-      const excludeScore = score - missingServicePenalty * 1.15 - weakHistoryPenalty * 1.45 - advicePenalty * .5 - repeatedHistoryPenalty - weatherFallbackPenalty - currentQualityPenalty * 2;
+      const excludeScore = score - missingServicePenalty * 1.15 - weakHistoryPenalty * 1.45 - advicePenalty * .8 - repeatedHistoryPenalty - weatherFallbackPenalty - currentQualityPenalty * 2 - rainQualityPenalty * 1.8;
       const departAt = new Date(window.arrive.getTime() - drive * 60000);
       const homeAt = new Date(window.leave.getTime() + drive * 60000);
       const totalTripMinutes = drive * 2 + cfg.stayHours * 60;
@@ -1570,7 +1591,7 @@
     }
 
     const SORT_LABELS = {
-      score_desc: "Bästa badläge",
+      score_desc: "Bästa bad",
       water_desc: "Varmast vatten",
       air_desc: "Varmast luft",
       rain_asc: "Minst regn",
@@ -1610,10 +1631,22 @@
       return Math.abs(diff) > 0.0001 ? diff : 0;
     }
 
+    function rainSortWeight(row) {
+      if (row.window?.thunder) return 10000;
+      const rain = row.window?.rain || 0;
+      const preRain = row.window?.preRain || 0;
+      const rainyCode = row.window?.rainyCode ? 250 : 0;
+      if (rain > 0 || rainyCode) return 1000 + rain * 180 + preRain * 20 + rainyCode;
+      if (preRain >= 3) return 350 + preRain * 20;
+      return 0;
+    }
+
     function sortRows(rows, sortKeys) {
       const keys = [...new Set((sortKeys?.length ? sortKeys : ["score_desc"]).filter((key) => key && key !== "none"))];
       if (!keys.includes("score_desc")) keys.push("score_desc");
       return rows.slice().sort((a, b) => {
+        const rainResult = rainSortWeight(a) - rainSortWeight(b);
+        if (Math.abs(rainResult) > 0.0001) return rainResult;
         for (const key of keys) {
           const result = compareBySortKey(a, b, key);
           if (result) return result;
@@ -1625,7 +1658,7 @@
     function sortSummaryText(options = cfg()) {
       const keys = [...new Set((options.sortKeys?.length ? options.sortKeys : ["score_desc"]).filter((key) => key && key !== "none"))];
       const labels = keys.map((key) => SORT_LABELS[key]).filter(Boolean);
-      return labels.length ? labels.join(" + ") : "Bästa badläge";
+      return labels.length ? labels.join(" + ") : "Bästa bad";
     }
 
     function syncSortControls() {
@@ -1682,7 +1715,7 @@
         const marker = best && best.dayIndex === dayIndex ? "Bästa dag: " : "";
         return `<div class="day-chip"><b>${marker}${dayLabel(dayIndex)} · ${Math.round(row.score)} p</b><span>${escapeHtml(row.beach.name)}, ${round(row.waterTemp)} C vatten, ${round(row.window.air)} C luft, ${round(row.window.rain)} mm regn, ${round(row.window.wind)} m/s vind.</span></div>`;
       }).join("");
-      return `<div class="day-strip" aria-label="Jämför badläge 1 till 3 dagar">${chips}</div>`;
+      return `<div class="day-strip" aria-label="Jämför bad 1 till 3 dagar">${chips}</div>`;
     }
 
     function bestRowsByStay() {
@@ -1930,21 +1963,6 @@
       return negative ? `${positive}; dras ned av ${negative}` : positive;
     }
 
-    function swimAdvice(row) {
-      const quality = String(row.quality || "").toLowerCase();
-      if (row.beach.advice.length || quality.includes("otjän")) return { label: "Avstå idag", tone: "bad", reason: "avrådan eller otjänlig vattenkvalitet" };
-      if (row.window.thunder) return { label: "Avstå idag", tone: "bad", reason: "åska i badfönstret" };
-      if ((row.window.rain || 0) >= 4) return { label: "Avstå idag", tone: "bad", reason: "för mycket regn under badfönstret" };
-      if (row.score >= 82 && (row.waterTemp || 0) >= 17 && (row.window.air || 0) >= 18 && (row.window.rain || 0) < 0.5) {
-        return { label: "Perfekt badläge", tone: "good", reason: "varmt vatten, bra luft och nästan inget regn" };
-      }
-      if (row.score >= 68 && (row.window.rain || 0) < 1.5 && !row.window.thunder) {
-        return { label: "Bra badläge", tone: "good", reason: "bra helhet för bad" };
-      }
-      if (row.score >= 50) return { label: "Okej med koll", tone: "warn", reason: "kontrollera skyltning, regn och vind innan du åker" };
-      return { label: "Svagt badläge", tone: "warn", reason: "låg totalpoäng jämfört med andra stränder" };
-    }
-
     function dayLabel(dayIndex) {
       return ["Idag", "Imorgon", "I övermorgon"][dayIndex] || `Dag ${dayIndex + 1}`;
     }
@@ -1968,6 +1986,14 @@
       return `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(`${start.lat},${start.lon}`)}&destination=${encodeURIComponent(`${beach.lat},${beach.lon}`)}&travelmode=driving`;
     }
 
+    function warningMessages(row) {
+      const warnings = [];
+      const quality = String(row.quality || "").toLowerCase();
+      if (row.beach.advice.length || quality.includes("otjän")) warnings.push("Varning: otjänligt vatten eller aktiv avrådan.");
+      if (row.window.thunder) warnings.push("Varning: åska i badfönstret.");
+      return warnings;
+    }
+
     function beachCard(row, rank, categoryKey) {
       const b = row.beach;
       const klass = row.beach.advice.length ? "bad" : row.quality.toLowerCase().includes("anmärkning") ? "warn" : "good";
@@ -1976,7 +2002,7 @@
       const description = [b.profile?.summary, b.description].filter(Boolean).join(" ").slice(0, 900);
       const municipalityContact = contactText(b.profile?.bathingWater?.municipality?.contactInfo || b.profile?.municipality?.contactInfo);
       const supervisoryContact = contactText(b.profile?.supervisoryAuthority?.contactInfo);
-      const advice = swimAdvice(row);
+      const warnings = warningMessages(row);
       const serviceCheck = serviceChecklist(row.services);
       const outlook = threeDayOutlook(b);
       const dataFlags = dataQualityFlags(row);
@@ -2004,7 +2030,6 @@
               <div class="fact"><b>${round(row.wave)} m</b><span>Vågor</span></div>
             </div>
             <div class="tags">
-              <span class="pill ${advice.tone}">${escapeHtml(advice.label)}</span>
               <span class="pill ${klass}">${escapeHtml(row.quality)}</span>
               <span class="pill">${escapeHtml(categoryTitle(categoryKey))}</span>
               <span class="pill">Prov ${latestDate}</span>
@@ -2014,8 +2039,8 @@
               <a class="pill" href="${routeUrl(b)}" target="_blank" rel="noreferrer">Vägbeskrivning</a>
               ${tags.map((tag) => `<span class="pill">${escapeHtml(tag)}</span>`).join("")}
             </div>
+            ${warnings.length ? `<div class="warnings">${warnings.map((item) => `<div class="warning">${escapeHtml(item)}</div>`).join("")}</div>` : ""}
             <div class="quick-info">
-              <div><b>Badläge:</b> ${escapeHtml(advice.label)} - ${escapeHtml(advice.reason)}.</div>
               <div><b>Rankningsorsak:</b> ${escapeHtml(reason)}.</div>
               <div><b>Service/prov:</b> ${escapeHtml(serviceCheck)}. ${escapeHtml(sampleInfo)}.</div>
             </div>
@@ -2024,7 +2049,6 @@
               <div class="explain">
                 <p>${escapeHtml(description || "Ingen längre beskrivning hittades i badplatsregistret.")}</p>
                 <div class="detail-grid">
-                  <div class="detail-box"><b>Badläge</b>${escapeHtml(advice.label)}: ${escapeHtml(advice.reason)}.</div>
                   <div class="detail-box"><b>Rankningsorsak</b>${escapeHtml(reason)}.</div>
                   <div class="detail-box"><b>Poängförklaring</b>${escapeHtml(scoreBreakdownText(row))}</div>
                   <div class="detail-box"><b>Vattenkvalitet</b>${escapeHtml(row.quality)}. ${escapeHtml(adviceText(b))}</div>
@@ -2097,7 +2121,7 @@
         <p><b>Filter och sortering:</b> ${filter === "all" ? "alla kategorier" : `${categoryTitle(filter)}`}${search ? `, sökning "${escapeHtml(search)}"` : ""}; sorterat på ${escapeHtml(sortSummaryText())}. ${visibleCount} kort syns.</p>
         ${removedCount ? `<p><b>Bortsorterat:</b> ${removedCount} bad hålls utanför topp 100 på grund av svagare kvalitet, service, historik eller väder.</p>` : ""}
         ${removedExampleHtml}
-        <p><b>Säkerhet:</b> kontrollera alltid lokal skyltning vid åska, avrådan, algblomning eller kraftigt regn.</p>`;
+        <p><b>Säkerhet:</b> röda varningar visas direkt i listan för åska och otjänligt vatten. Lokal skyltning på plats gäller alltid.</p>`;
     }
 
     function buildCsv(rows) {
@@ -2107,7 +2131,7 @@
         ranksByCategory.set(key, (ranksByCategory.get(key) || 0) + 1);
         row.categoryRank = ranksByCategory.get(key);
       });
-      const header = ["total_rank", "kategori_rank", "kategori", "strand", "kommun", "poang", "badlage", "badlage_orsak", "rankningsorsak", "vatten_c", "vatten_kalla", "vatten_kalla_tid", "luft_c", "regn_mm", "regn_fore_bad_mm", "vader", "aska", "vind_ms", "vagor_m", "restid_min", "ak_hemifran", "hemma_ca", "vagbeskrivning_url", "vatten_poang", "luft_poang", "regn_aska_poang", "vind_vag_poang", "kvalitet_poang", "service_bonus", "saknad_service_straff", "svag_historik_straff", "upprepat_svag_historik", "historikbedomning", "provstatus", "restidsstraff", "kvalitetsstraff", "kvalitet", "servicekontroll", "service"].join(",");
+      const header = ["total_rank", "kategori_rank", "kategori", "strand", "kommun", "poang", "rankningsorsak", "vatten_c", "vatten_kalla", "vatten_kalla_tid", "luft_c", "regn_mm", "regn_fore_bad_mm", "vader", "aska", "vind_ms", "vagor_m", "restid_min", "ak_hemifran", "hemma_ca", "vagbeskrivning_url", "vatten_poang", "luft_poang", "regn_aska_poang", "vind_vag_poang", "kvalitet_poang", "service_bonus", "saknad_service_straff", "svag_historik_straff", "upprepat_svag_historik", "historikbedomning", "provstatus", "restidsstraff", "kvalitetsstraff", "kvalitet", "servicekontroll", "service"].join(",");
       const lines = rows.map((row, i) => [
         i + 1,
         row.categoryRank || i + 1,
@@ -2115,8 +2139,6 @@
         row.beach.name,
         row.beach.municipality,
         Math.round(row.score),
-        swimAdvice(row).label,
-        swimAdvice(row).reason,
         rankingReason(row),
         round(row.waterTemp),
         waterSourceLabel(row),
@@ -2168,7 +2190,7 @@
       renderMunicipalityOverview(rows);
       renderNotes(rows, state.raw.length, removedRows, unscoredRemovedCount, driveExcludedCount);
       buildCsv(visibleRows);
-      $("sortSummary").textContent = `Sortering: ${sortSummaryText(options)}. Kvalitetsspärren och topp 100-urvalet gäller fortfarande innan listan sorteras.`;
+      $("sortSummary").textContent = `Sortering: ${sortSummaryText(options)}. Regn, åska och otjänligt vatten pressas ned innan listan sorteras.`;
       $("countPill").textContent = visibleRows.length === rows.length
         ? `${rows.length} stränder`
         : `${visibleRows.length} visas av ${rows.length}`;
