@@ -1283,11 +1283,17 @@
     }
 
     function bestWaterTemp(beach, dayIndex, startHour, endHour) {
-      const havForecasts = toArray(beach.waterForecast?.waterForecasts)
+      const hourDistanceToWindow = (hour) => {
+        if (hour >= startHour && hour <= endHour) return 0;
+        return hour < startHour ? startHour - hour : hour - endHour;
+      };
+      const havForecasts = dayIndex === 0 ? toArray(beach.waterForecast?.waterForecasts)
         .map((x) => ({ hour: Number(x.measHour), temp: parseNumber(x.waterTemp) }))
-        .filter((x) => Number.isFinite(x.hour) && isPlausibleWaterTemp(x.temp) && x.hour >= startHour && x.hour <= endHour);
+        .filter((x) => Number.isFinite(x.hour) && isPlausibleWaterTemp(x.temp))
+        .map((x) => ({ ...x, distance: hourDistanceToWindow(x.hour) }))
+        .filter((x) => x.distance <= 4) : [];
       const havBest = havForecasts.length
-        ? havForecasts.slice().sort((a, b) => b.temp - a.temp)[0]
+        ? havForecasts.slice().sort((a, b) => a.distance - b.distance || b.temp - a.temp)[0]
         : null;
       const marine = beach.marine?.hourly;
       let marineBest = null;
@@ -1306,8 +1312,8 @@
       }
       if (Number.isFinite(havBest?.temp)) return { value: havBest.temp, source: "HaV vattenprognos", sourceTime: `${dayLabel(dayIndex)} kl ${String(havBest.hour).padStart(2, "0")}` };
       const sampleTemp = parseNumber(beach.latestResult?.waterTemp);
-      const sampleAge = daysSince(beach.latestResult?.takenAt);
-      return isPlausibleWaterTemp(sampleTemp) && Number.isFinite(sampleAge) && sampleAge <= 30
+      const sampleAgeHours = sourceAgeHours(beach.latestResult?.takenAt);
+      return dayIndex === 0 && isPlausibleWaterTemp(sampleTemp) && Number.isFinite(sampleAgeHours) && sampleAgeHours <= 24
         ? { value: sampleTemp, source: "Senaste vattenprov", sourceTime: beach.latestResult?.takenAt || null }
         : { value: null, source: "Saknas" };
     }
@@ -1320,7 +1326,7 @@
             ? `${Math.round(row.waterSourceAgeHours)} tim gammalt`
             : `${Math.round(row.waterSourceAgeHours / 24)} dagar gammalt`
           : "okänd ålder";
-        return `Prov ${date}, ${age}`;
+        return `Vattentemp från prov ${date}, ${age}`;
       }
       if (row.waterSource === "HaV vattenprognos") return `HaV prognos ${row.waterSourceTime || ""}`.trim();
       if (row.waterSource === "Open-Meteo Marine") return `Marine ${dateOnly(row.waterSourceTime)}`;
@@ -2070,7 +2076,7 @@
             <div class="tags">
               <span class="pill ${klass}">${escapeHtml(row.quality)}</span>
               <span class="pill">${escapeHtml(categoryTitle(categoryKey))}</span>
-              <span class="pill">Prov ${latestDate}</span>
+              <span class="pill">Kvalitetsprov ${latestDate}</span>
               <span class="pill">Åk ${formatTime(row.departAt)}</span>
               <span class="pill">${formatTime(row.window.arrive)}-${formatTime(row.window.leave)}</span>
               <span class="pill">Hemma ca ${formatTime(row.homeAt)}</span>
@@ -2093,7 +2099,7 @@
                   <div class="detail-box"><b>Datakoll</b>${escapeHtml(dataFlags)}.</div>
                   <div class="detail-box"><b>Kvalitetsnotering</b>${escapeHtml(qualityCaution(b, row.window))}</div>
                   <div class="detail-box"><b>Väderläge</b>${escapeHtml(weatherLabel(row.window))} under valt badfönster. Åska: ${row.window.thunder ? "ja" : "nej"}, regn under bad ${round(row.window.rain)} mm, regn före bad ${round(row.window.preRain)} mm.</div>
-                  <div class="detail-box"><b>Vattentemperatur</b>${round(row.waterTemp)} C. Källa: ${escapeHtml(waterSourceLabel(row))}.</div>
+                  <div class="detail-box"><b>Vattentemperatur</b>${round(row.waterTemp)} C. ${escapeHtml(waterSourceLabel(row))}.</div>
                   <div class="detail-box"><b>Senaste prov</b>${latestDate}. ${escapeHtml(sampleInfo)}. Rådata: E. coli ${escapeHtml(String(b.latestResult?.escherichiaColiPrefix || ""))}${escapeHtml(String(b.latestResult?.escherichiaColiCount ?? "-"))}, enterokocker ${escapeHtml(String(b.latestResult?.intestinalEnterococciPrefix || ""))}${escapeHtml(String(b.latestResult?.intestinalEnterococciCount ?? "-"))}. Alger: ${escapeHtml(b.latestResult?.algalIdText || "ej hittat")}.</div>
                   <div class="detail-box"><b>Klassning</b>${escapeHtml(classificationText(b))}</div>
                   <div class="detail-box"><b>Historikbedömning</b>${escapeHtml(row.history?.text || "klassningshistorik saknas")}.</div>
