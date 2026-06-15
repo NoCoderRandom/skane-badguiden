@@ -722,6 +722,7 @@
       s3: "sortTertiary",
       q: "searchInput"
     };
+    const SORT_SELECT_IDS = ["sortPrimary", "sortSecondary", "sortTertiary"];
 
     function clamp(value, min, max) {
       return Math.max(min, Math.min(max, value));
@@ -1652,6 +1653,27 @@
       return labels.length ? labels.join(" + ") : "Bästa badläge";
     }
 
+    function syncSortControls() {
+      const seen = new Set();
+      SORT_SELECT_IDS.forEach((id) => {
+        const select = $(id);
+        if (!select || select.value === "none") return;
+        if (seen.has(select.value)) select.value = "none";
+        else seen.add(select.value);
+      });
+      SORT_SELECT_IDS.forEach((id) => {
+        const select = $(id);
+        if (!select) return;
+        const usedElsewhere = new Set(SORT_SELECT_IDS
+          .filter((otherId) => otherId !== id)
+          .map((otherId) => $(otherId)?.value)
+          .filter((value) => value && value !== "none"));
+        [...select.options].forEach((option) => {
+          option.disabled = option.value !== "none" && option.value !== select.value && usedElsewhere.has(option.value);
+        });
+      });
+    }
+
     function evaluateRanking(options) {
       const evaluated = state.raw.map((beach) => scoreBeach(beach, options));
       const unscoredRemovedCount = evaluated.filter((row) => !row).length;
@@ -2320,8 +2342,9 @@
 
     $("refreshBtn").addEventListener("click", refresh);
     let searchRenderTimer = null;
-    ["daySelect", "startSelect", "maxDrive", "stayHours", "categoryFilter", "sortPrimary", "sortSecondary", "sortTertiary"].forEach((id) => {
+    ["daySelect", "startSelect", "maxDrive", "stayHours", "categoryFilter", ...SORT_SELECT_IDS].forEach((id) => {
       $(id).addEventListener("change", () => {
+        if (SORT_SELECT_IDS.includes(id)) syncSortControls();
         updateUrlState();
         if (state.raw.length) rankAndRender();
       });
@@ -2345,6 +2368,8 @@
     });
 
     applyUrlState();
+    syncSortControls();
+    updateUrlState();
     refresh();
   </script>
 </body>
