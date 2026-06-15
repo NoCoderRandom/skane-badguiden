@@ -1997,7 +1997,8 @@
       const minus = [];
       if (Number.isFinite(row.waterTemp) && row.waterTemp >= 17) plus.push(`varmt vatten ${round(row.waterTemp)} C`);
       if ((row.window.air || 0) >= 18) plus.push(`bra luft ${round(row.window.air)} C`);
-      if ((row.window.rain || 0) < .5 && !row.window.thunder) plus.push("nästan inget regn/ingen åska");
+      if (!row.window.thunder && (row.window.rain || 0) <= .05) plus.push("inget regn");
+      else if (!row.window.thunder && (row.window.rain || 0) < .5) plus.push("nästan inget regn");
       if ((row.window.wind || 0) <= 5) plus.push(`låg vind ${round(row.window.wind)} m/s`);
       if (b.qualityScore >= 90) plus.push("stark vattenkvalitet");
       if (b.serviceBonus >= 16) plus.push("bra bekräftad service");
