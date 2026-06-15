@@ -2004,7 +2004,7 @@
               ${tags.map((tag) => `<span class="pill">${escapeHtml(tag)}</span>`).join("")}
             </div>
             <div class="quick-info">
-              <div><b>Badråd:</b> ${escapeHtml(advice.label)} - ${escapeHtml(advice.reason)}.</div>
+              <div><b>Badläge:</b> ${escapeHtml(advice.label)} - ${escapeHtml(advice.reason)}.</div>
               <div><b>Rankningsorsak:</b> ${escapeHtml(reason)}.</div>
               <div><b>Service/prov:</b> ${escapeHtml(serviceCheck)}. ${escapeHtml(sampleInfo)}.</div>
             </div>
@@ -2013,7 +2013,7 @@
               <div class="explain">
                 <p>${escapeHtml(description || "Ingen längre beskrivning hittades i badplatsregistret.")}</p>
                 <div class="detail-grid">
-                  <div class="detail-box"><b>Badråd</b>${escapeHtml(advice.label)}: ${escapeHtml(advice.reason)}.</div>
+                  <div class="detail-box"><b>Badläge</b>${escapeHtml(advice.label)}: ${escapeHtml(advice.reason)}.</div>
                   <div class="detail-box"><b>Rankningsorsak</b>${escapeHtml(reason)}.</div>
                   <div class="detail-box"><b>Poängförklaring</b>${escapeHtml(scoreBreakdownText(row))}</div>
                   <div class="detail-box"><b>Vattenkvalitet</b>${escapeHtml(row.quality)}. ${escapeHtml(adviceText(b))}</div>
@@ -2095,7 +2095,7 @@
         ranksByCategory.set(key, (ranksByCategory.get(key) || 0) + 1);
         row.categoryRank = ranksByCategory.get(key);
       });
-      const header = ["total_rank", "kategori_rank", "kategori", "strand", "kommun", "poang", "badrad", "badrad_orsak", "rankningsorsak", "vatten_c", "vatten_kalla", "vatten_kalla_tid", "luft_c", "regn_mm", "regn_fore_bad_mm", "vader", "aska", "vind_ms", "vagor_m", "restid_min", "ak_hemifran", "hemma_ca", "vagbeskrivning_url", "vatten_poang", "luft_poang", "regn_aska_poang", "vind_vag_poang", "kvalitet_poang", "service_bonus", "saknad_service_straff", "svag_historik_straff", "upprepat_svag_historik", "historikbedomning", "provstatus", "restidsstraff", "kvalitetsstraff", "kvalitet", "servicekontroll", "service"].join(",");
+      const header = ["total_rank", "kategori_rank", "kategori", "strand", "kommun", "poang", "badlage", "badlage_orsak", "rankningsorsak", "vatten_c", "vatten_kalla", "vatten_kalla_tid", "luft_c", "regn_mm", "regn_fore_bad_mm", "vader", "aska", "vind_ms", "vagor_m", "restid_min", "ak_hemifran", "hemma_ca", "vagbeskrivning_url", "vatten_poang", "luft_poang", "regn_aska_poang", "vind_vag_poang", "kvalitet_poang", "service_bonus", "saknad_service_straff", "svag_historik_straff", "upprepat_svag_historik", "historikbedomning", "provstatus", "restidsstraff", "kvalitetsstraff", "kvalitet", "servicekontroll", "service"].join(",");
       const lines = rows.map((row, i) => [
         i + 1,
         row.categoryRank || i + 1,
