@@ -1064,6 +1064,17 @@
       return `${hours} tim gammal`;
     }
 
+    function formatDataTime(value) {
+      const date = value ? new Date(value) : null;
+      return date && Number.isFinite(date.getTime()) ? date.toLocaleString("sv-SE") : "okänd tid";
+    }
+
+    function isCacheOlderThanHours(hours) {
+      if (!state.cachedAt) return false;
+      const timestamp = new Date(state.cachedAt).getTime();
+      return Number.isFinite(timestamp) && Date.now() - timestamp > hours * 3600000;
+    }
+
     function serviceTags(beach) {
       const text = [
         beach.description,
@@ -2078,8 +2089,9 @@
         unscoredRemovedCount ? `${unscoredRemovedCount} saknar vattentemperatur eller komplett badfönster` : "",
         removedCount ? `${removedCount} sorteras bort på kvalitet, service, historik och väder` : ""
       ].filter(Boolean).join("; ") || "inga extra bad behöver sorteras bort inom aktuellt filter";
+      const staleCacheText = isCacheOlderThanHours(24) ? " (äldre än 24 timmar)" : "";
       $("runNotes").innerHTML = `
-        <p><b>Senast uppdaterad:</b> ${new Date().toLocaleString("sv-SE")}.</p>
+        <p><b>Data uppdaterad:</b> ${formatDataTime(state.cachedAt)}${staleCacheText}. Sidan visad ${new Date().toLocaleString("sv-SE")}.</p>
         <p><b>Datastatus:</b> ${escapeHtml(sourceText)}</p>
         <p><b>Urval:</b> ${state.skaneCount || allCount} skånska badplatser hittades. Sidan analyserar ${allCount}; ${escapeHtml(limitText)}. Den visar/exporterar ${exportCount} stränder i aktuell vy: ${seaCount} havsstränder och ${lakeCount} sjöstränder/inlandsvatten.</p>
         <p><b>Filter och sortering:</b> ${filter === "all" ? "alla kategorier" : `${categoryTitle(filter)}`}${search ? `, sökning "${escapeHtml(search)}"` : ""}; sorterat på ${escapeHtml(sortSummaryText())}. ${visibleCount} kort syns.</p>
