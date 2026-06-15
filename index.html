@@ -650,6 +650,7 @@
       "https://overpass.kumi.systems/api/interpreter",
       "https://overpass.openstreetmap.ru/api/interpreter"
     ];
+    const STATIC_DATA_URL = "data.json";
     const FALLBACK_BEACHES_URL = "skane-fallback.tsv";
     const CACHE_KEY = "skane-bad-ranking-cache-v11";
     const CACHE_KEYS = [CACHE_KEY, "skane-bad-ranking-cache-v10", "skane-bad-ranking-cache-v9", "skane-bad-ranking-cache-v8", "skane-bad-ranking-cache-v7", "skane-bad-ranking-cache-v6", "skane-bad-ranking-cache-v5", "skane-bad-ranking-cache-v4", "skane-bad-ranking-cache-v3", "skane-bad-ranking-cache-v2", "skane-bad-ranking-cache-v1"];
@@ -1066,6 +1067,28 @@
       }
     }
 
+    async function loadStaticData() {
+      if (FORCE_FALLBACK || FORCE_OFFLINE) return false;
+      try {
+        const response = await fetch(`${STATIC_DATA_URL}?v=${Date.now()}`, { cache: "no-store" });
+        if (!response.ok) return false;
+        const data = await response.json();
+        if (!data?.beaches?.length) return false;
+        state.raw = data.beaches;
+        state.skaneCount = data.skaneCount || data.beaches.length;
+        state.osmAmenityCount = data.osmAmenityCount || 0;
+        state.osmFailedBatches = data.osmFailedBatches || 0;
+        state.sourceMode = "static";
+        state.cachedAt = data.generatedAt || null;
+        rankAndRender();
+        saveCache();
+        return true;
+      } catch (error) {
+        console.warn("Could not load static beach data.", error);
+        return false;
+      }
+    }
+
     function cacheAgeText() {
       if (!state.cachedAt) return "okänd tid";
       const minutes = Math.max(0, Math.round((Date.now() - new Date(state.cachedAt).getTime()) / 60000));
@@ -1104,6 +1127,10 @@
 
     function qualityText(beach) {
       if (beach.advice.length) return "Avrådan";
+      const age = daysSince(beach.latestResult?.takenAt);
+      if (!beach.latestResult) return "Kvalitet otillgänglig";
+      if (!Number.isFinite(age)) return "Kvalitet otillgänglig";
+      if (age > 30) return `Kvalitet otillgänglig (prov ${age} dagar gammalt)`;
       const latest = beach.latestResult?.sampleAssessIdText;
       if (latest) return latest;
       const cls = classificationRows(beach)[0]?.qualityClassIdText;
@@ -1113,6 +1140,7 @@
     function qualityScore(beach) {
       const text = qualityText(beach).toLowerCase();
       if (beach.advice.length || text.includes("otjän")) return 0;
+      if (text.includes("otillgänglig") || text.includes("ej hämtad")) return 0;
       if (text.includes("anmärkning") || text.includes("tillfredsställande")) return 55;
       if (text.includes("god")) return 82;
       if (text.includes("utmärkt") || text.includes("tjänligt")) return 100;
@@ -1262,7 +1290,8 @@
       }
       if (Number.isFinite(havBest?.temp)) return { value: havBest.temp, source: "HaV vattenprognos", sourceTime: `${dayLabel(dayIndex)} kl ${String(havBest.hour).padStart(2, "0")}` };
       const sampleTemp = parseNumber(beach.latestResult?.waterTemp);
-      return isPlausibleWaterTemp(sampleTemp)
+      const sampleAge = daysSince(beach.latestResult?.takenAt);
+      return isPlausibleWaterTemp(sampleTemp) && Number.isFinite(sampleAge) && sampleAge <= 30
         ? { value: sampleTemp, source: "Senaste vattenprov", sourceTime: beach.latestResult?.takenAt || null }
         : { value: null, source: "Saknas" };
     }
@@ -1461,6 +1490,11 @@
       if (!Number.isFinite(waterTemp)) return null;
       const waterSourceTime = water.sourceTime || null;
       const waterSourceAgeHours = sourceAgeHours(waterSourceTime);
+      const sampleAge = daysSince(beach.latestResult?.takenAt);
+      const qualityLabel = qualityText(beach);
+      const qualityLower = qualityLabel.toLowerCase();
+      if (beach.advice.length || qualityLower.includes("otjän")) return null;
+      if (!beach.latestResult || !Number.isFinite(sampleAge) || sampleAge > 90) return null;
       const wave = waveFor(beach, cfg.dayIndex, window.arrive.getHours(), window.leave.getHours());
       const waterScore = clamp((waterTemp - 8) * 7.4, 0, 100);
       const airScore = clamp(100 - Math.abs((window.air || 0) - 25) * 6, 0, 100);
@@ -1476,13 +1510,13 @@
       const drivePenalty = Math.max(0, drive - 75) * .18;
       const advicePenalty = beach.advice.length ? 80 : 0;
       const weatherFallbackPenalty = window.fallback ? 20 : 0;
-      const sampleAge = daysSince(beach.latestResult?.takenAt);
-      const samplePenalty = Number.isFinite(sampleAge) ? clamp((sampleAge - 21) * .22, 0, 10) : 7;
+      const currentQualityPenalty = sampleAge > 30 || qualityLower.includes("otillgänglig") ? 55 : 0;
+      const samplePenalty = Number.isFinite(sampleAge) ? clamp((sampleAge - 14) * .65, 0, 35) : 35;
       const rainQualityPenalty = (window.rain || 0) >= 2 || (window.preRain || 0) >= 3
         ? 5 + Math.min(5, (window.preRain || 0) * .7)
         : 0;
-      const score = waterScore * .35 + airScore * .25 + rainScore * .20 + windScore * .10 + qScore * .10 + serviceScore - drivePenalty - advicePenalty - samplePenalty - rainQualityPenalty - missingServicePenalty - weakHistoryPenalty - weatherFallbackPenalty;
-      const excludeScore = score - missingServicePenalty * 1.15 - weakHistoryPenalty * 1.45 - advicePenalty * .5 - repeatedHistoryPenalty - weatherFallbackPenalty;
+      const score = waterScore * .35 + airScore * .25 + rainScore * .20 + windScore * .10 + qScore * .10 + serviceScore - drivePenalty - advicePenalty - samplePenalty - rainQualityPenalty - missingServicePenalty - weakHistoryPenalty - weatherFallbackPenalty - currentQualityPenalty;
+      const excludeScore = score - missingServicePenalty * 1.15 - weakHistoryPenalty * 1.45 - advicePenalty * .5 - repeatedHistoryPenalty - weatherFallbackPenalty - currentQualityPenalty * 2;
       const departAt = new Date(window.arrive.getTime() - drive * 60000);
       const homeAt = new Date(window.leave.getTime() + drive * 60000);
       const totalTripMinutes = drive * 2 + cfg.stayHours * 60;
@@ -1499,9 +1533,10 @@
         advicePenalty,
         weatherFallbackPenalty,
         samplePenalty,
-        rainQualityPenalty
+        rainQualityPenalty,
+        currentQualityPenalty
       };
-      return { beach, drive, departAt, homeAt, totalTripMinutes, stayHours: cfg.stayHours, sampleAge, window, waterTemp, waterSource: water.source, waterSourceTime, waterSourceAgeHours, wave, services, history, breakdown, excludeScore, score: clamp(score, 0, 100), quality: qualityText(beach) };
+      return { beach, drive, departAt, homeAt, totalTripMinutes, stayHours: cfg.stayHours, sampleAge, window, waterTemp, waterSource: water.source, waterSourceTime, waterSourceAgeHours, wave, services, history, breakdown, excludeScore, score: clamp(score, 0, 100), quality: qualityLabel };
     }
 
     function cfg() {
@@ -1918,6 +1953,7 @@
         `väderfallback -${round(b.weatherFallbackPenalty || 0)}`,
         `restidsstraff -${round(b.drivePenalty)}`,
         `prov-/regnrisk -${round(b.samplePenalty + b.rainQualityPenalty)}`,
+        `otillgänglig aktuell kvalitet -${round(b.currentQualityPenalty || 0)}`,
         `bortsorteringspoäng ${Math.round(row.excludeScore)} där service och historik väger extra`
       ].join("; ");
     }
@@ -1938,6 +1974,7 @@
       if ((row.window.wind || 0) > 8) minus.push(`blåsigt ${round(row.window.wind)} m/s`);
       if (b.missingServicePenalty >= 14) minus.push("toalett/service ej bekräftad");
       if (row.history?.repeatedWeak) minus.push("upprepat svag klassningshistorik");
+      if ((b.currentQualityPenalty || 0) > 0) minus.push("aktuell kvalitet otillgänglig");
       if (Number.isFinite(row.sampleAge) && row.sampleAge > 21) minus.push(`prov ${row.sampleAge} dagar gammalt`);
       const positive = plus.slice(0, 3).join(", ") || "jämn totalpoäng";
       const negative = minus.slice(0, 2).join(", ");
@@ -2093,9 +2130,11 @@
         </details>` : "";
       const sourceText = state.sourceMode === "cache"
         ? `Cache används (${cacheAgeText()}) eftersom live-data inte kunde hämtas.`
-        : state.sourceMode === "fallback"
-          ? "Reservlista används eftersom live-HaV och lokal cache saknades. Väder hämtas om möjligt, men prov- och historikdata kan vara ofullständig."
-        : "Live-data hämtades vid sidladdningen.";
+        : state.sourceMode === "static"
+          ? `GitHub-cache/data.json används (${cacheAgeText()}). Den uppdateras schemalagt av GitHub Actions.`
+          : state.sourceMode === "fallback"
+            ? "Reservlista används eftersom data.json, live-HaV och lokal cache saknades. Väder hämtas om möjligt, men prov- och historikdata kan vara ofullständig."
+            : "Live-data hämtades vid sidladdningen.";
       const limitText = [
         driveExcludedCount ? `${driveExcludedCount} ligger utanför valt restidsfilter` : "",
         unscoredRemovedCount ? `${unscoredRemovedCount} saknar vattentemperatur eller komplett badfönster` : "",
@@ -2184,20 +2223,28 @@
       $("countPill").textContent = visibleRows.length === rows.length
         ? `${rows.length} stränder`
         : `${visibleRows.length} visas av ${rows.length}`;
-      $("statusPill").className = state.sourceMode === "live" ? "pill good" : "pill warn";
+      $("statusPill").className = state.sourceMode === "live" || state.sourceMode === "static" ? "pill good" : "pill warn";
       $("statusPill").textContent = state.sourceMode === "cache"
         ? `Cache från ${from.name}`
-        : state.sourceMode === "fallback"
-          ? `Reservlista från ${from.name}`
-          : `Live från ${from.name}`;
+        : state.sourceMode === "static"
+          ? `Data från GitHub-cache`
+          : state.sourceMode === "fallback"
+            ? `Reservlista från ${from.name}`
+            : `Live från ${from.name}`;
       return { rows, scored, removedRows };
     }
 
     async function refresh() {
       $("refreshBtn").disabled = true;
       $("statusPill").className = "pill warn";
+      $("statusPill").textContent = "Hämtar GitHub-cache";
+      $("beachList").innerHTML = `<div class="empty">Hämtar färdig badranking från data.json.</div>`;
+      if (await loadStaticData()) {
+        $("refreshBtn").disabled = false;
+        return;
+      }
       $("statusPill").textContent = "Hämtar live-data";
-      $("beachList").innerHTML = `<div class="empty">Hämtar badplatser från HaV, profiler, provresultat, väder och marin prognos. Det kan ta en liten stund första gången.</div>`;
+      $("beachList").innerHTML = `<div class="empty">data.json saknades. Hämtar badplatser från HaV, profiler, provresultat, väder och marin prognos.</div>`;
       const showedCache = !FORCE_FALLBACK && loadCache();
       if (showedCache) {
         $("statusPill").className = "pill warn";
