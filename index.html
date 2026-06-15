@@ -2320,6 +2320,7 @@
     }
 
     $("refreshBtn").addEventListener("click", refresh);
+    let searchRenderTimer = null;
     ["daySelect", "startSelect", "maxDrive", "stayHours", "limitSelect", "categoryFilter", "sortPrimary", "sortSecondary", "sortTertiary"].forEach((id) => {
       $(id).addEventListener("change", () => {
         updateUrlState();
@@ -2328,7 +2329,10 @@
     });
     $("searchInput").addEventListener("input", () => {
       updateUrlState();
-      if (state.raw.length) rankAndRender();
+      clearTimeout(searchRenderTimer);
+      searchRenderTimer = setTimeout(() => {
+        if (state.raw.length) rankAndRender();
+      }, 180);
     });
     $("csvBtn").addEventListener("click", async () => {
       if (!state.lastCsv) return showToast("Ingen ranking att exportera ännu.");
