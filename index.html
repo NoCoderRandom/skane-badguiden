@@ -845,7 +845,7 @@
           wind_speed_unit: "ms"
         }, "weather"),
         loadOpenMeteoBatch(beaches, MARINE_BASE, {
-          hourly: "sea_surface_temperature,wave_height"
+          hourly: "sea_surface_temperature"
         }, "marine")
       ]);
     }
@@ -1389,16 +1389,6 @@
       return best;
     }
 
-    function waveFor(beach, dayIndex, startHour, endHour) {
-      const hourly = beach.marine?.hourly;
-      if (!hourly?.time || !hourly?.wave_height) return null;
-      const values = hourly.time.map((time, i) => ({ time: new Date(time), wave: hourly.wave_height[i] }))
-        .filter((x) => dayOffset(x.time) === dayIndex && x.time.getHours() >= startHour && x.time.getHours() <= endHour)
-        .map((x) => x.wave)
-        .filter(Number.isFinite);
-      return values.length ? Math.max(...values) : null;
-    }
-
     function weatherSeverity(code) {
       if (THUNDER_CODES.has(code)) return 9;
       if ([65, 67, 82].includes(code)) return 8;
@@ -1544,11 +1534,10 @@
       const qualityLabel = qualityText(beach);
       const qualityLower = qualityLabel.toLowerCase();
       if (!beach.latestResult || !Number.isFinite(sampleAge) || sampleAge > 90) return null;
-      const wave = waveFor(beach, cfg.dayIndex, window.arrive.getHours(), window.leave.getHours());
       const waterScore = clamp((waterTemp - 8) * 7.4, 0, 100);
       const airScore = clamp(100 - Math.abs((window.air || 0) - 25) * 6, 0, 100);
       const rainScore = window.thunder ? 0 : clamp(100 - (window.rain || 0) * 130 - (window.preRain || 0) * 12 - (window.rainyCode ? 35 : 0), 0, 100);
-      const windScore = clamp(100 - (window.wind || 0) * 9.5 - Math.max(0, (window.gust || 0) - 8.5) * 4.3 - (wave || 0) * 16, 0, 100);
+      const windScore = clamp(100 - (window.wind || 0) * 9.5 - Math.max(0, (window.gust || 0) - 8.5) * 4.3, 0, 100);
       const qScore = qualityScore(beach);
       const services = serviceTags(beach);
       const serviceScore = clamp(services.length * 8, 0, 30);
@@ -1585,7 +1574,7 @@
         algaePenalty,
         currentQualityPenalty
       };
-      return { beach, drive, departAt, homeAt, totalTripMinutes, stayHours: cfg.stayHours, sampleAge, window, waterTemp, waterSource: water.source, waterSourceTime, waterSourceAgeHours, wave, services, history, breakdown, excludeScore, score: clamp(score, 0, 100), quality: qualityLabel };
+      return { beach, drive, departAt, homeAt, totalTripMinutes, stayHours: cfg.stayHours, sampleAge, window, waterTemp, waterSource: water.source, waterSourceTime, waterSourceAgeHours, services, history, breakdown, excludeScore, score: clamp(score, 0, 100), quality: qualityLabel };
     }
 
     function cfg() {
@@ -1656,7 +1645,7 @@
       if (key === "water_desc") return row.waterTemp;
       if (key === "air_desc") return row.window.air;
       if (key === "rain_asc") return row.window.rain + row.window.preRain * .35 + (row.window.thunder ? 99 : 0);
-      if (key === "wind_asc") return (row.window.wind || 0) + Math.max(0, (row.window.gust || 0) - 8) * .25 + (row.wave || 0) * 1.5;
+      if (key === "wind_asc") return (row.window.wind || 0) + Math.max(0, (row.window.gust || 0) - 8) * .25;
       if (key === "drive_asc") return row.drive;
       if (key === "fresh_water_asc") {
         if (row.waterSource === "HaV vattenprognos" || row.waterSource === "HaV dygnsprognos" || row.waterSource === "Open-Meteo Marine") return 0;
@@ -1976,7 +1965,7 @@
         `vatten ${Math.round(b.waterScore)}/100 väger 35%`,
         `luft ${Math.round(b.airScore)}/100 väger 25%`,
         `regn/åska ${Math.round(b.rainScore)}/100 väger 20%`,
-        `vind/vågor ${Math.round(b.windScore)}/100 väger 10%`,
+        `vind ${Math.round(b.windScore)}/100 väger 10%`,
         `vattenkvalitet ${Math.round(b.qualityScore)}/100 väger 10%`,
         `servicebonus +${Math.round(b.serviceBonus)}`,
         `saknad toa/service -${round(b.missingServicePenalty)}`,
@@ -2091,7 +2080,6 @@
               <div class="fact"><b>${escapeHtml(weatherLabel(row.window))}</b><span>Väder</span></div>
               <div class="fact"><b>${row.window.thunder ? "Ja" : "Nej"}</b><span>Åska</span></div>
               <div class="fact"><b>${round(row.window.wind)} m/s</b><span>Vind</span></div>
-              <div class="fact"><b>${round(row.wave)} m</b><span>Vågor</span></div>
             </div>
             <div class="tags">
               <span class="pill ${klass}">${escapeHtml(row.quality)}</span>
@@ -2195,7 +2183,7 @@
         ranksByCategory.set(key, (ranksByCategory.get(key) || 0) + 1);
         row.categoryRank = ranksByCategory.get(key);
       });
-      const header = ["total_rank", "kategori_rank", "kategori", "strand", "kommun", "poang", "rankningsorsak", "vatten_c", "vatten_kalla", "vatten_kalla_tid", "luft_c", "regn_mm", "regn_fore_bad_mm", "vader", "aska", "vind_ms", "vagor_m", "restid_min", "ak_hemifran", "hemma_ca", "vagbeskrivning_url", "vatten_poang", "luft_poang", "regn_aska_poang", "vind_vag_poang", "kvalitet_poang", "service_bonus", "saknad_service_straff", "svag_historik_straff", "upprepat_svag_historik", "historikbedomning", "provstatus", "restidsstraff", "kvalitetsstraff", "kvalitet", "servicekontroll", "service"].join(",");
+      const header = ["total_rank", "kategori_rank", "kategori", "strand", "kommun", "poang", "rankningsorsak", "vatten_c", "vatten_kalla", "vatten_kalla_tid", "luft_c", "regn_mm", "regn_fore_bad_mm", "vader", "aska", "vind_ms", "restid_min", "ak_hemifran", "hemma_ca", "vagbeskrivning_url", "vatten_poang", "luft_poang", "regn_aska_poang", "vind_poang", "kvalitet_poang", "service_bonus", "saknad_service_straff", "svag_historik_straff", "upprepat_svag_historik", "historikbedomning", "provstatus", "restidsstraff", "kvalitetsstraff", "kvalitet", "servicekontroll", "service"].join(",");
       const lines = rows.map((row, i) => [
         i + 1,
         row.categoryRank || i + 1,
@@ -2213,7 +2201,6 @@
         weatherLabel(row.window),
         row.window.thunder ? "ja" : "nej",
         round(row.window.wind),
-        round(row.wave),
         row.drive,
         formatTime(row.departAt),
         formatTime(row.homeAt),
