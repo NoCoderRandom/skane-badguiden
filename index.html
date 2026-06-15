@@ -2221,7 +2221,9 @@
       renderNotes(rows, state.raw.length, removedRows, unscoredRemovedCount, driveExcludedCount);
       buildCsv(visibleRows);
       $("sortSummary").textContent = `Sortering: ${sortSummaryText(options)}. Kvalitetsspärren och topp 100-urvalet gäller fortfarande innan listan sorteras.`;
-      $("countPill").textContent = `${rows.length} stränder`;
+      $("countPill").textContent = visibleRows.length === rows.length
+        ? `${rows.length} stränder`
+        : `${visibleRows.length} visas av ${rows.length}`;
       $("statusPill").className = state.sourceMode === "live" ? "pill good" : "pill warn";
       $("statusPill").textContent = state.sourceMode === "cache"
         ? `Cache från ${from.name}`
@@ -2249,7 +2251,7 @@
         state.raw = beaches;
         state.sourceMode = "live";
         state.cachedAt = null;
-        $("countPill").textContent = `Räknar topp 100 av ${state.raw.length}`;
+        if (!showedCache) $("countPill").textContent = `Räknar topp 100 av ${state.raw.length}`;
         await enrichBeaches(state.raw);
         const initialRanking = rankAndRender();
         saveCache();
