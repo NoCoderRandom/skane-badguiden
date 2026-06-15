@@ -315,13 +315,6 @@
       border-bottom: 2px solid var(--line);
     }
 
-    .category-head p {
-      margin: 4px 0 0;
-      color: var(--muted);
-      font-size: .9rem;
-      line-height: 1.35;
-    }
-
     .beach-card {
       display: grid;
       grid-template-columns: 72px minmax(0, 1fr);
@@ -1776,12 +1769,6 @@
       return key === "lake" ? "Sjöstränder" : "Havsstränder";
     }
 
-    function categoryDescription(key) {
-      return key === "lake"
-        ? "Rankas separat eftersom sjöbad och andra inlandsvatten ofta har mindre vågor och annan temperatur än kustbad."
-        : "Rankas separat eftersom kustbad påverkas mer av havsvind, vågor och marina temperaturmodeller.";
-    }
-
     function rowMatchesSearch(row, query) {
       if (!query) return true;
       const haystack = [
@@ -1815,7 +1802,6 @@
             <div class="category-head">
               <div>
                 <h3>${categoryTitle(key)}</h3>
-                <p>${categoryDescription(key)}</p>
               </div>
               <span class="pill">${groupRows.length} visas</span>
             </div>
