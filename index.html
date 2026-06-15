@@ -640,7 +640,7 @@
     <section class="grid">
       <div>
         <div class="section-title">
-          <h2>De 100 bästa stränderna</h2>
+          <h2>Bästa stränderna med vattentemperatur</h2>
           <button id="csvBtn" class="secondary" type="button">Exportera CSV</button>
         </div>
         <div id="quickTopList" class="quick-table"></div>
@@ -743,6 +743,10 @@
     function maxFinite(values) {
       const finite = values.filter(Number.isFinite);
       return finite.length ? Math.max(...finite) : null;
+    }
+
+    function isPlausibleWaterTemp(value) {
+      return Number.isFinite(value) && value >= 4 && value <= 35;
     }
 
     function sleep(ms) {
@@ -1148,8 +1152,11 @@
       if (!beach.latestResult) flags.push("senaste prov saknas");
       if (Number.isFinite(row.sampleAge) && row.sampleAge > 21) flags.push(`prov ${row.sampleAge} dagar gammalt`);
       if (!classificationRows(beach).length) flags.push("klassningshistorik saknas");
-      if (row.waterSource === "HaV vattenprognos" && Number.isFinite(sampleTemp) && Number.isFinite(row.waterTemp) && Number.isFinite(row.sampleAge) && row.sampleAge <= 10 && sampleTemp - row.waterTemp >= 2.5) {
+      if (row.waterSource === "HaV vattenprognos" && isPlausibleWaterTemp(sampleTemp) && Number.isFinite(row.waterTemp) && Number.isFinite(row.sampleAge) && row.sampleAge <= 10 && sampleTemp - row.waterTemp >= 2.5) {
         flags.push(`ovanligt låg vattenprognos jämfört med prov ${round(sampleTemp)} C för ${row.sampleAge} dagar sedan`);
+      }
+      if (row.waterSource === "HaV vattenprognos" && Number.isFinite(row.waterTemp) && row.waterTemp < 10) {
+        flags.push(`mycket låg HaV-prognos ${round(row.waterTemp)} C, kontrollera lokal badinfo innan du åker`);
       }
       if (row.history?.repeatedWeak) flags.push(row.history.text);
       if (!Number.isFinite(row.waterTemp)) flags.push("vattentemperatur saknas");
@@ -1221,29 +1228,52 @@
     function bestWaterTemp(beach, dayIndex, startHour, endHour) {
       const havForecasts = toArray(beach.waterForecast?.waterForecasts)
         .map((x) => ({ hour: Number(x.measHour), temp: parseNumber(x.waterTemp) }))
-        .filter((x) => Number.isFinite(x.hour) && Number.isFinite(x.temp) && x.hour >= startHour && x.hour <= endHour);
-      const havBest = havForecasts.length ? Math.max(...havForecasts.map((x) => x.temp)) : null;
+        .filter((x) => Number.isFinite(x.hour) && isPlausibleWaterTemp(x.temp) && x.hour >= startHour && x.hour <= endHour);
+      const havBest = havForecasts.length
+        ? havForecasts.slice().sort((a, b) => b.temp - a.temp)[0]
+        : null;
       const marine = beach.marine?.hourly;
       let marineBest = null;
       if (marine?.time && marine?.sea_surface_temperature) {
         const values = marine.time.map((time, i) => ({ time: new Date(time), temp: marine.sea_surface_temperature[i] }))
           .filter((x) => dayOffset(x.time) === dayIndex && x.time.getHours() >= startHour && x.time.getHours() <= endHour)
-          .map((x) => x.temp)
-          .filter(Number.isFinite);
-        marineBest = values.length ? Math.max(...values) : null;
-        if (Number.isFinite(havBest) && Number.isFinite(marineBest)) {
-          return havBest >= marineBest
-            ? { value: havBest, source: "HaV vattenprognos" }
-            : { value: marineBest, source: "Open-Meteo Marine" };
+          .filter((x) => isPlausibleWaterTemp(x.temp));
+        marineBest = values.length ? values.slice().sort((a, b) => b.temp - a.temp)[0] : null;
+        if (Number.isFinite(havBest?.temp) && Number.isFinite(marineBest?.temp)) {
+          return havBest.temp >= marineBest.temp
+            ? { value: havBest.temp, source: "HaV vattenprognos", sourceTime: `${dayLabel(dayIndex)} kl ${String(havBest.hour).padStart(2, "0")}` }
+            : { value: marineBest.temp, source: "Open-Meteo Marine", sourceTime: marineBest.time.toISOString() };
         }
-        if (Number.isFinite(havBest)) return { value: havBest, source: "HaV vattenprognos" };
-        if (Number.isFinite(marineBest)) return { value: marineBest, source: "Open-Meteo Marine" };
+        if (Number.isFinite(havBest?.temp)) return { value: havBest.temp, source: "HaV vattenprognos", sourceTime: `${dayLabel(dayIndex)} kl ${String(havBest.hour).padStart(2, "0")}` };
+        if (Number.isFinite(marineBest?.temp)) return { value: marineBest.temp, source: "Open-Meteo Marine", sourceTime: marineBest.time.toISOString() };
       }
-      if (Number.isFinite(havBest)) return { value: havBest, source: "HaV vattenprognos" };
+      if (Number.isFinite(havBest?.temp)) return { value: havBest.temp, source: "HaV vattenprognos", sourceTime: `${dayLabel(dayIndex)} kl ${String(havBest.hour).padStart(2, "0")}` };
       const sampleTemp = parseNumber(beach.latestResult?.waterTemp);
-      return Number.isFinite(sampleTemp)
-        ? { value: sampleTemp, source: "Senaste vattenprov" }
+      return isPlausibleWaterTemp(sampleTemp)
+        ? { value: sampleTemp, source: "Senaste vattenprov", sourceTime: beach.latestResult?.takenAt || null }
         : { value: null, source: "Saknas" };
+    }
+
+    function waterSourceLabel(row) {
+      if (row.waterSource === "Senaste vattenprov") {
+        const date = dateOnly(row.waterSourceTime);
+        const age = Number.isFinite(row.waterSourceAgeHours)
+          ? row.waterSourceAgeHours < 24
+            ? `${Math.round(row.waterSourceAgeHours)} tim gammalt`
+            : `${Math.round(row.waterSourceAgeHours / 24)} dagar gammalt`
+          : "okänd ålder";
+        return `Prov ${date}, ${age}`;
+      }
+      if (row.waterSource === "HaV vattenprognos") return `HaV prognos ${row.waterSourceTime || ""}`.trim();
+      if (row.waterSource === "Open-Meteo Marine") return `Marine ${dateOnly(row.waterSourceTime)}`;
+      return row.waterSource || "Saknas";
+    }
+
+    function sourceAgeHours(value) {
+      if (!value) return null;
+      const time = new Date(value).getTime();
+      if (!Number.isFinite(time)) return null;
+      return Math.max(0, (Date.now() - time) / 3600000);
     }
 
     function dayOffset(date) {
@@ -1367,8 +1397,11 @@
       const window = weatherWindow(beach, cfg.dayIndex, drive, cfg.stayHours) || fallbackWeatherWindow(cfg.dayIndex, drive, cfg.stayHours);
       const water = bestWaterTemp(beach, cfg.dayIndex, window.arrive.getHours(), window.leave.getHours());
       const waterTemp = water.value;
+      if (!Number.isFinite(waterTemp)) return null;
+      const waterSourceTime = water.sourceTime || null;
+      const waterSourceAgeHours = sourceAgeHours(waterSourceTime);
       const wave = waveFor(beach, cfg.dayIndex, window.arrive.getHours(), window.leave.getHours());
-      const waterScore = Number.isFinite(waterTemp) ? clamp((waterTemp - 8) * 7.4, 0, 100) : 45;
+      const waterScore = clamp((waterTemp - 8) * 7.4, 0, 100);
       const airScore = clamp(100 - Math.abs((window.air || 0) - 25) * 6, 0, 100);
       const rainScore = window.thunder ? 0 : clamp(100 - (window.rain || 0) * 45 - (window.rainyCode ? 18 : 0), 0, 100);
       const windScore = clamp(100 - (window.wind || 0) * 9.5 - Math.max(0, (window.gust || 0) - 8.5) * 4.3 - (wave || 0) * 16, 0, 100);
@@ -1407,7 +1440,7 @@
         samplePenalty,
         rainQualityPenalty
       };
-      return { beach, drive, departAt, homeAt, totalTripMinutes, stayHours: cfg.stayHours, sampleAge, window, waterTemp, waterSource: water.source, wave, services, history, breakdown, excludeScore, score: clamp(score, 0, 100), quality: qualityText(beach) };
+      return { beach, drive, departAt, homeAt, totalTripMinutes, stayHours: cfg.stayHours, sampleAge, window, waterTemp, waterSource: water.source, waterSourceTime, waterSourceAgeHours, wave, services, history, breakdown, excludeScore, score: clamp(score, 0, 100), quality: qualityText(beach) };
     }
 
     function cfg() {
@@ -1859,7 +1892,7 @@
               <div class="score">${Math.round(row.score)} poäng</div>
             </div>
             <div class="facts">
-              <div class="fact"><b>${round(row.waterTemp)} C</b><span>Vatten, ${escapeHtml(waterSourceShort(row.waterSource))}</span></div>
+              <div class="fact"><b>${round(row.waterTemp)} C</b><span>${escapeHtml(waterSourceLabel(row))}</span></div>
               <div class="fact"><b>${round(row.window.air)} C</b><span>Luft</span></div>
               <div class="fact"><b>${round(row.window.rain)} mm</b><span>Regn</span></div>
               <div class="fact"><b>${round(row.window.preRain)} mm</b><span>Regn före</span></div>
@@ -1899,7 +1932,7 @@
                   <div class="detail-box"><b>Datakoll</b>${escapeHtml(dataFlags)}.</div>
                   <div class="detail-box"><b>Kvalitetsrisk idag</b>${escapeHtml(qualityCaution(b, row.window))}</div>
                   <div class="detail-box"><b>Väderläge</b>${escapeHtml(weatherLabel(row.window.weatherCode))} under valt badfönster. Åska: ${row.window.thunder ? "ja" : "nej"}, regn under bad ${round(row.window.rain)} mm, regn före bad ${round(row.window.preRain)} mm.</div>
-                  <div class="detail-box"><b>Vattentemperatur</b>${round(row.waterTemp)} C, källa: ${escapeHtml(row.waterSource)}.</div>
+                  <div class="detail-box"><b>Vattentemperatur</b>${round(row.waterTemp)} C. Källa: ${escapeHtml(waterSourceLabel(row))}.</div>
                   <div class="detail-box"><b>Senaste prov</b>${latestDate}. ${escapeHtml(sampleInfo)}. Rådata: E. coli ${escapeHtml(String(b.latestResult?.escherichiaColiPrefix || ""))}${escapeHtml(String(b.latestResult?.escherichiaColiCount ?? "-"))}, enterokocker ${escapeHtml(String(b.latestResult?.intestinalEnterococciPrefix || ""))}${escapeHtml(String(b.latestResult?.intestinalEnterococciCount ?? "-"))}. Alger: ${escapeHtml(b.latestResult?.algalIdText || "ej hittat")}.</div>
                   <div class="detail-box"><b>Klassning</b>${escapeHtml(classificationText(b))}</div>
                   <div class="detail-box"><b>Historikbedömning</b>${escapeHtml(row.history?.text || "klassningshistorik saknas")}.</div>
@@ -1965,7 +1998,7 @@
         : "Live-data hämtades vid sidladdningen.";
       const limitText = [
         driveExcludedCount ? `${driveExcludedCount} ligger utanför valt restidsfilter` : "",
-        unscoredRemovedCount ? `${unscoredRemovedCount} saknar komplett prognos/badfönster` : "",
+        unscoredRemovedCount ? `${unscoredRemovedCount} saknar vattentemperatur eller komplett badfönster` : "",
         removedCount ? `${removedCount} sorteras bort på kvalitet, service, historik och väder` : ""
       ].filter(Boolean).join("; ") || "inga extra bad behöver sorteras bort inom aktuellt filter";
       const bestDay = bestRowsByDay().filter((item) => item.row).sort((a, b) => b.row.score - a.row.score)[0];
@@ -1990,7 +2023,7 @@
         <p><b>Bästa vistelse 2-4 timmar:</b> ${bestStayText}</p>
         <p><b>Servicekontroll:</b> ${escapeHtml(osmText)} Toalett, kiosk och restaurang/café kan komma från både HaV-text och OSM nära stranden.${escapeHtml(osmRemark)}</p>
         ${removedCount ? `<p><b>Bortsortering:</b> de ${removedCount} som faller bort är framför allt bad med svag totalpoäng, saknad toalett/mat/åtkomst i badplatsdatan eller återkommande svag vattenklassning år efter år.</p>` : ""}
-        ${removedCount ? `<p><b>Bortsorteringskontroll:</b> ${removedCount} bad sorteras bort. Av ${removedWithScores} borttagna med komplett prognosdata är ${removedSea} havsbad och ${removedLake} sjöbad/inlandsvatten; ${removedNoToilet} saknar toalett i hämtad badplatsdata, ${removedNoFoodOrAccess} saknar flera basfunktioner, ${removedWeakHistory} har svag klassningshistorik, ${removedRepeatedWeak} har upprepat svag klassningshistorik, ${removedAdvice} har aktiv avrådan och ${removedOldSample} har äldre prov än 21 dagar.${unscoredRemovedCount ? ` ${unscoredRemovedCount} bad saknade komplett prognos/badfönster och hålls också utanför topplistan.` : ""}</p>` : ""}
+        ${removedCount ? `<p><b>Bortsorteringskontroll:</b> ${removedCount} bad sorteras bort. Av ${removedWithScores} borttagna med komplett temperatur/prognosdata är ${removedSea} havsbad och ${removedLake} sjöbad/inlandsvatten; ${removedNoToilet} saknar toalett i hämtad badplatsdata, ${removedNoFoodOrAccess} saknar flera basfunktioner, ${removedWeakHistory} har svag klassningshistorik, ${removedRepeatedWeak} har upprepat svag klassningshistorik, ${removedAdvice} har aktiv avrådan och ${removedOldSample} har äldre prov än 21 dagar.${unscoredRemovedCount ? ` ${unscoredRemovedCount} bad saknade vattentemperatur eller komplett badfönster och hålls också utanför topplistan.` : ""}</p>` : ""}
         ${removedExampleHtml}
         <p><b>Vatten:</b> temperaturen hämtas i första hand från HaV:s vattenprognos eller Open-Meteo Marine, annars från senaste vattenprov när prognos saknas.</p>
         <p><b>Viktig säkerhet:</b> vid åska, avrådan, algblomning eller kraftigt regn efter lång torrperiod bör du kontrollera kommunens/HaV:s sida innan bad.</p>
@@ -2004,7 +2037,7 @@
         ranksByCategory.set(key, (ranksByCategory.get(key) || 0) + 1);
         row.categoryRank = ranksByCategory.get(key);
       });
-      const header = ["total_rank", "kategori_rank", "kategori", "strand", "kommun", "poang", "badrad", "badrad_orsak", "rankningsorsak", "vatten_c", "vatten_kalla", "luft_c", "regn_mm", "regn_fore_bad_mm", "vader", "aska", "vind_ms", "vagor_m", "restid_min", "ak_hemifran", "hemma_ca", "vagbeskrivning_url", "vatten_poang", "luft_poang", "regn_aska_poang", "vind_vag_poang", "kvalitet_poang", "service_bonus", "saknad_service_straff", "svag_historik_straff", "upprepat_svag_historik", "historikbedomning", "provstatus", "restidsstraff", "kvalitetsstraff", "kvalitet", "servicekontroll", "service"].join(",");
+      const header = ["total_rank", "kategori_rank", "kategori", "strand", "kommun", "poang", "badrad", "badrad_orsak", "rankningsorsak", "vatten_c", "vatten_kalla", "vatten_kalla_tid", "luft_c", "regn_mm", "regn_fore_bad_mm", "vader", "aska", "vind_ms", "vagor_m", "restid_min", "ak_hemifran", "hemma_ca", "vagbeskrivning_url", "vatten_poang", "luft_poang", "regn_aska_poang", "vind_vag_poang", "kvalitet_poang", "service_bonus", "saknad_service_straff", "svag_historik_straff", "upprepat_svag_historik", "historikbedomning", "provstatus", "restidsstraff", "kvalitetsstraff", "kvalitet", "servicekontroll", "service"].join(",");
       const lines = rows.map((row, i) => [
         i + 1,
         row.categoryRank || i + 1,
@@ -2016,7 +2049,8 @@
         swimAdvice(row).reason,
         rankingReason(row),
         round(row.waterTemp),
-        row.waterSource,
+        waterSourceLabel(row),
+        row.waterSourceTime || "",
         round(row.window.air),
         round(row.window.rain),
         round(row.window.preRain),
@@ -2122,14 +2156,12 @@
             state.sourceMode = "fallback";
             state.cachedAt = null;
             $("countPill").textContent = `Räknar topp 100 av ${state.raw.length}`;
+            $("statusPill").className = "pill warn";
+            $("statusPill").textContent = "Reservlista - hämtar temperaturer";
+            $("beachList").innerHTML = `<div class="empty">Reservlistan är laddad. Hämtar vattentemperaturer och väder innan stränder visas, så inga bad utan faktisk temperatur hamnar i topplistan.</div>`;
+            await enrichBeaches(state.raw);
             rankAndRender();
-            enrichBeaches(state.raw).then(() => {
-              rankAndRender();
-              saveCache();
-            }).catch((enrichError) => {
-              console.warn("Fallback enrichment failed; showing basic fallback ranking.", enrichError);
-              rankAndRender();
-            });
+            saveCache();
             showToast("Visar reservlista eftersom live-data/cache saknades.");
           } catch (fallbackError) {
             console.error(error);
