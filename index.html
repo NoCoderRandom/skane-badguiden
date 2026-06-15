@@ -2293,6 +2293,7 @@
       } catch (error) {
         const usedCache = showedCache || (FORCE_FALLBACK ? false : loadCache());
         if (usedCache) {
+          if (showedCache && state.raw.length) rankAndRender();
           console.warn("Live refresh failed; using cached beach ranking.", error);
           showToast("Live-data kunde inte hämtas, visar senast sparade ranking.");
         } else {
