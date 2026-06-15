@@ -77,11 +77,21 @@ async function loadSharedRuntime() {
 async function main() {
   const startedAt = new Date();
   const runtime = await loadSharedRuntime();
-  const beaches = await runtime.loadBathingWaters();
-  beaches.sort((a, b) => a.name.localeCompare(b.name, "sv-SE"));
-  runtime.state.skaneCount = beaches.length;
+  let beaches = [];
+  try {
+    beaches = await runtime.loadBathingWaters();
+    beaches.sort((a, b) => a.name.localeCompare(b.name, "sv-SE"));
+    runtime.state.skaneCount = beaches.length;
+    await runtime.enrichBeaches(beaches);
+  } catch (error) {
+    const existing = JSON.parse(await readFile(outputPath, "utf8").catch(() => "null"));
+    if (existing?.beaches?.length) {
+      console.warn(`Could not refresh live data, keeping existing data.json: ${error.message}`);
+      return;
+    }
+    throw error;
+  }
 
-  await runtime.enrichBeaches(beaches);
   runtime.state.raw = beaches;
 
   try {
