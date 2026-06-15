@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const htmlPath = resolve(root, "index.html");
 const outputPath = resolve(root, "data.json");
+const REQUEST_TIMEOUT_MS = 120000;
+const REQUEST_TIMEOUT_SECONDS = Math.round(REQUEST_TIMEOUT_MS / 1000);
 
 function nodeFetch(url, options = {}) {
   return new Promise((resolvePromise, reject) => {
@@ -18,7 +20,7 @@ function nodeFetch(url, options = {}) {
     const request = client.request(target, {
       method: options.method || "GET",
       headers,
-      timeout: 45000
+      timeout: REQUEST_TIMEOUT_MS
     }, (response) => {
       const chunks = [];
       response.on("data", (chunk) => chunks.push(chunk));
@@ -33,7 +35,7 @@ function nodeFetch(url, options = {}) {
         });
       });
     });
-    request.on("timeout", () => request.destroy(new Error(`Request timeout after 45s: ${url}`)));
+    request.on("timeout", () => request.destroy(new Error(`Request timeout after ${REQUEST_TIMEOUT_SECONDS}s: ${url}`)));
     request.on("error", reject);
     options.signal?.addEventListener("abort", () => request.destroy(new Error(`Request aborted: ${url}`)), { once: true });
     if (body) request.write(body);
@@ -55,7 +57,7 @@ function extractSharedCode(html) {
   return script.slice(start, end)
     .replace(/const FORCE_OFFLINE = [^\n]+;/, "const FORCE_OFFLINE = false;")
     .replace(/const FORCE_FALLBACK = [^\n]+;/, "const FORCE_FALLBACK = false;")
-    .replace(/controller\.abort\(\), 9000\)/g, "controller.abort(), 30000)");
+    .replace(/controller\.abort\(\), 9000\)/g, `controller.abort(), ${REQUEST_TIMEOUT_MS})`);
 }
 
 async function loadSharedRuntime() {
