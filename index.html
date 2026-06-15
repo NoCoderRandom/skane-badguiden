@@ -2259,14 +2259,20 @@
       }
       try {
         if (FORCE_FALLBACK) throw new Error("Reservlistetest");
-        const beaches = await loadBathingWaters();
-        beaches.sort((a, b) => a.name.localeCompare(b.name, "sv-SE"));
+        const beaches = await Promise.race([
+          (async () => {
+            const liveBeaches = await loadBathingWaters();
+            liveBeaches.sort((a, b) => a.name.localeCompare(b.name, "sv-SE"));
+            await enrichBeaches(liveBeaches);
+            return liveBeaches;
+          })(),
+          timeoutAfter(showedCache ? 75000 : 130000, "Liveuppdatering tog för lång tid")
+        ]);
         state.skaneCount = beaches.length;
         state.raw = beaches;
         state.sourceMode = "live";
         state.cachedAt = null;
         if (!showedCache) $("countPill").textContent = `Räknar topp 100 av ${state.raw.length}`;
-        await enrichBeaches(state.raw);
         const initialRanking = rankAndRender();
         saveCache();
         $("statusPill").className = "pill warn";
