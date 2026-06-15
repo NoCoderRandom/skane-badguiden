@@ -1661,15 +1661,15 @@
         if (seen.has(select.value)) select.value = "none";
         else seen.add(select.value);
       });
-      SORT_SELECT_IDS.forEach((id) => {
+      SORT_SELECT_IDS.forEach((id, index) => {
         const select = $(id);
         if (!select) return;
-        const usedElsewhere = new Set(SORT_SELECT_IDS
-          .filter((otherId) => otherId !== id)
+        const usedEarlier = new Set(SORT_SELECT_IDS
+          .slice(0, index)
           .map((otherId) => $(otherId)?.value)
           .filter((value) => value && value !== "none"));
         [...select.options].forEach((option) => {
-          option.disabled = option.value !== "none" && option.value !== select.value && usedElsewhere.has(option.value);
+          option.disabled = option.value !== "none" && option.value !== select.value && usedEarlier.has(option.value);
         });
       });
     }
