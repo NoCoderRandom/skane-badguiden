@@ -1,10 +1,47 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
+import http from "node:http";
+import https from "node:https";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const htmlPath = resolve(root, "index.html");
 const outputPath = resolve(root, "data.json");
+
+function nodeFetch(url, options = {}) {
+  return new Promise((resolvePromise, reject) => {
+    const target = new URL(url);
+    const body = options.body ? String(options.body) : null;
+    const headers = { ...(options.headers || {}) };
+    if (body && !headers["Content-Length"]) headers["Content-Length"] = Buffer.byteLength(body);
+    const client = target.protocol === "http:" ? http : https;
+    const request = client.request(target, {
+      method: options.method || "GET",
+      headers,
+      timeout: 45000
+    }, (response) => {
+      const chunks = [];
+      response.on("data", (chunk) => chunks.push(chunk));
+      response.on("end", () => {
+        const text = Buffer.concat(chunks).toString("utf8");
+        resolvePromise({
+          ok: response.statusCode >= 200 && response.statusCode < 300,
+          status: response.statusCode,
+          statusText: response.statusMessage || "",
+          text: async () => text,
+          json: async () => JSON.parse(text)
+        });
+      });
+    });
+    request.on("timeout", () => request.destroy(new Error(`Request timeout after 45s: ${url}`)));
+    request.on("error", reject);
+    options.signal?.addEventListener("abort", () => request.destroy(new Error(`Request aborted: ${url}`)), { once: true });
+    if (body) request.write(body);
+    request.end();
+  });
+}
+
+globalThis.fetch = nodeFetch;
 
 function extractSharedCode(html) {
   const scriptMatch = html.match(/<script>([\s\S]*?)<\/script>/);
