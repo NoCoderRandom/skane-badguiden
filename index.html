@@ -1290,11 +1290,12 @@
       const havForecasts = dayIndex === 0 ? toArray(beach.waterForecast?.waterForecasts)
         .map((x) => ({ hour: Number(x.measHour), temp: parseNumber(x.waterTemp) }))
         .filter((x) => Number.isFinite(x.hour) && isPlausibleWaterTemp(x.temp))
-        .map((x) => ({ ...x, distance: hourDistanceToWindow(x.hour) }))
-        .filter((x) => x.distance <= 4) : [];
-      const havBest = havForecasts.length
-        ? havForecasts.slice().sort((a, b) => a.distance - b.distance || b.temp - a.temp)[0]
+        .map((x) => ({ ...x, distance: hourDistanceToWindow(x.hour) })) : [];
+      const havNearby = havForecasts.filter((x) => x.distance <= 4);
+      const havBest = (havNearby.length ? havNearby : havForecasts).length
+        ? (havNearby.length ? havNearby : havForecasts).slice().sort((a, b) => a.distance - b.distance || b.temp - a.temp)[0]
         : null;
+      const havSource = havBest ? (havNearby.length ? "HaV vattenprognos" : "HaV dygnsprognos") : null;
       const marine = beach.marine?.hourly;
       let marineBest = null;
       if (marine?.time && marine?.sea_surface_temperature) {
@@ -1304,13 +1305,13 @@
         marineBest = values.length ? values.slice().sort((a, b) => b.temp - a.temp)[0] : null;
         if (Number.isFinite(havBest?.temp) && Number.isFinite(marineBest?.temp)) {
           return havBest.temp >= marineBest.temp
-            ? { value: havBest.temp, source: "HaV vattenprognos", sourceTime: `${dayLabel(dayIndex)} kl ${String(havBest.hour).padStart(2, "0")}` }
+            ? { value: havBest.temp, source: havSource, sourceTime: `${dayLabel(dayIndex)} kl ${String(havBest.hour).padStart(2, "0")}` }
             : { value: marineBest.temp, source: "Open-Meteo Marine", sourceTime: marineBest.time.toISOString() };
         }
-        if (Number.isFinite(havBest?.temp)) return { value: havBest.temp, source: "HaV vattenprognos", sourceTime: `${dayLabel(dayIndex)} kl ${String(havBest.hour).padStart(2, "0")}` };
+        if (Number.isFinite(havBest?.temp)) return { value: havBest.temp, source: havSource, sourceTime: `${dayLabel(dayIndex)} kl ${String(havBest.hour).padStart(2, "0")}` };
         if (Number.isFinite(marineBest?.temp)) return { value: marineBest.temp, source: "Open-Meteo Marine", sourceTime: marineBest.time.toISOString() };
       }
-      if (Number.isFinite(havBest?.temp)) return { value: havBest.temp, source: "HaV vattenprognos", sourceTime: `${dayLabel(dayIndex)} kl ${String(havBest.hour).padStart(2, "0")}` };
+      if (Number.isFinite(havBest?.temp)) return { value: havBest.temp, source: havSource, sourceTime: `${dayLabel(dayIndex)} kl ${String(havBest.hour).padStart(2, "0")}` };
       const sampleTemp = parseNumber(beach.latestResult?.waterTemp);
       const sampleAgeHours = sourceAgeHours(beach.latestResult?.takenAt);
       return dayIndex === 0 && isPlausibleWaterTemp(sampleTemp) && Number.isFinite(sampleAgeHours) && sampleAgeHours <= 24
@@ -1329,6 +1330,7 @@
         return `Vattentemp från prov ${date}, ${age}`;
       }
       if (row.waterSource === "HaV vattenprognos") return `HaV prognos ${row.waterSourceTime || ""}`.trim();
+      if (row.waterSource === "HaV dygnsprognos") return `HaV dygnsprognos ${row.waterSourceTime || ""}`.trim();
       if (row.waterSource === "Open-Meteo Marine") return `Marine ${dateOnly(row.waterSourceTime)}`;
       return row.waterSource || "Saknas";
     }
@@ -1443,11 +1445,28 @@
       return "Uppehåll";
     }
 
+    function hourOfDay(date) {
+      return date.getHours() + date.getMinutes() / 60;
+    }
+
+    function sunBathTimeScore(w) {
+      if (!w?.arrive || !w?.leave) return 50;
+      const arriveHour = hourOfDay(w.arrive);
+      const leaveHour = hourOfDay(w.leave);
+      const midHour = (arriveHour + leaveHour) / 2;
+      const middayScore = clamp(100 - Math.abs(midHour - 14.2) * 14, 0, 100);
+      const latePenalty = Math.max(0, arriveHour - 16) * 18 + Math.max(0, leaveHour - 18.5) * 12;
+      const earlyPenalty = Math.max(0, 10 - arriveHour) * 10;
+      return clamp(middayScore - latePenalty - earlyPenalty, 0, 100);
+    }
+
     function scoreWeather(w) {
       const airScore = clamp(100 - Math.abs((w.air || 0) - 25) * 6, 0, 100);
       const rainScore = w.thunder ? 0 : clamp(100 - (w.rain || 0) * 45 - (w.rainyCode ? 18 : 0), 0, 100);
       const windScore = clamp(100 - (w.wind || 0) * 10 - Math.max(0, (w.gust || 0) - 8.5) * 5, 0, 100);
-      return airScore * .42 + rainScore * .42 + windScore * .16;
+      const cloudScore = Number.isFinite(w.cloud) ? clamp(100 - w.cloud * .75, 0, 100) : 60;
+      const timeScore = sunBathTimeScore(w);
+      return airScore * .30 + rainScore * .32 + windScore * .13 + cloudScore * .10 + timeScore * .15;
     }
 
     function fallbackWeatherWindow(beach, dayIndex, drive, stayHours) {
@@ -1640,7 +1659,7 @@
       if (key === "wind_asc") return (row.window.wind || 0) + Math.max(0, (row.window.gust || 0) - 8) * .25 + (row.wave || 0) * 1.5;
       if (key === "drive_asc") return row.drive;
       if (key === "fresh_water_asc") {
-        if (row.waterSource === "HaV vattenprognos" || row.waterSource === "Open-Meteo Marine") return 0;
+        if (row.waterSource === "HaV vattenprognos" || row.waterSource === "HaV dygnsprognos" || row.waterSource === "Open-Meteo Marine") return 0;
         if (Number.isFinite(row.waterSourceAgeHours)) return row.waterSourceAgeHours;
         if (Number.isFinite(row.sampleAge)) return row.sampleAge * 24;
         return Number.POSITIVE_INFINITY;
