@@ -1112,6 +1112,26 @@
       return [...new Set(tags)];
     }
 
+    function latestAlgaeText(beach) {
+      return beach.latestResult?.algalIdText || "saknas";
+    }
+
+    function hasCurrentAlgaeBloom(beach) {
+      const text = latestAlgaeText(beach).toLowerCase();
+      if (!text || text === "saknas") return false;
+      return !/ingen|ej bedömt|ej observerad|saknas/.test(text);
+    }
+
+    function algaeNote(beach) {
+      if (hasCurrentAlgaeBloom(beach)) return `senaste provet visar alger: ${latestAlgaeText(beach)}`;
+      return "";
+    }
+
+    function algaeRiskPenalty(beach) {
+      if (hasCurrentAlgaeBloom(beach)) return 95;
+      return 0;
+    }
+
     function classificationRows(beach) {
       return toArray(beach.profile?.lastFourClassifications)
         .slice()
@@ -1163,7 +1183,8 @@
       if (!Number.isFinite(age)) notes.push("provtagningsdatum saknas");
       if ((window?.rain || 0) >= 2) notes.push("regn under badfönstret kan försämra vatten nära utlopp och dagvatten");
       if ((window?.preRain || 0) >= 3) notes.push(`${round(window.preRain)} mm regn före badfönstret kan försämra vatten nära utlopp och dagvatten`);
-      if (beach.profile?.cyano || beach.profile?.algae) notes.push("profilen nämner alg/cyanorisk, kontrollera aktuell skyltning");
+      const algNote = algaeNote(beach);
+      if (algNote) notes.push(algNote);
       return notes.length ? notes.join("; ") : "inga extra kvalitetsvarningar i hämtad data";
     }
 
@@ -1196,6 +1217,8 @@
       if (!Number.isFinite(row.waterTemp)) flags.push("vattentemperatur saknas");
       if (!beach.weather?.hourly || row.window?.fallback) flags.push("väderprognos saknas eller ofullständig");
       if ((row.window?.preRain || 0) >= 3) flags.push(`${round(row.window.preRain)} mm regn före bad`);
+      const algNote = algaeNote(beach);
+      if (algNote) flags.push(algNote);
       if (!row.services.includes("Toalett")) flags.push("toalett ej bekräftad");
       if (!row.services.some((item) => item === "Kiosk" || item === "Restaurang")) flags.push("mat/kiosk ej bekräftad");
       return flags.length ? flags.join("; ") : "data ser komplett ut för dagens ranking";
@@ -1514,8 +1537,9 @@
       const currentQualityPenalty = sampleAge > 30 || qualityLower.includes("otillgänglig") ? 55 : 0;
       const samplePenalty = Number.isFinite(sampleAge) ? clamp((sampleAge - 14) * .65, 0, 35) : 35;
       const rainQualityPenalty = rainDownrankPenalty(window);
-      const score = waterScore * .35 + airScore * .25 + rainScore * .20 + windScore * .10 + qScore * .10 + serviceScore - drivePenalty - advicePenalty - samplePenalty - rainQualityPenalty - missingServicePenalty - weakHistoryPenalty - weatherFallbackPenalty - currentQualityPenalty;
-      const excludeScore = score - missingServicePenalty * 1.15 - weakHistoryPenalty * 1.45 - advicePenalty * .8 - repeatedHistoryPenalty - weatherFallbackPenalty - currentQualityPenalty * 2 - rainQualityPenalty * 1.8;
+      const algaePenalty = algaeRiskPenalty(beach);
+      const score = waterScore * .35 + airScore * .25 + rainScore * .20 + windScore * .10 + qScore * .10 + serviceScore - drivePenalty - advicePenalty - samplePenalty - rainQualityPenalty - missingServicePenalty - weakHistoryPenalty - weatherFallbackPenalty - currentQualityPenalty - algaePenalty;
+      const excludeScore = score - missingServicePenalty * 1.15 - weakHistoryPenalty * 1.45 - advicePenalty * .8 - repeatedHistoryPenalty - weatherFallbackPenalty - currentQualityPenalty * 2 - rainQualityPenalty * 1.8 - algaePenalty * 1.4;
       const departAt = new Date(window.arrive.getTime() - drive * 60000);
       const homeAt = new Date(window.leave.getTime() + drive * 60000);
       const totalTripMinutes = drive * 2 + cfg.stayHours * 60;
@@ -1533,6 +1557,7 @@
         weatherFallbackPenalty,
         samplePenalty,
         rainQualityPenalty,
+        algaePenalty,
         currentQualityPenalty
       };
       return { beach, drive, departAt, homeAt, totalTripMinutes, stayHours: cfg.stayHours, sampleAge, window, waterTemp, waterSource: water.source, waterSourceTime, waterSourceAgeHours, wave, services, history, breakdown, excludeScore, score: clamp(score, 0, 100), quality: qualityLabel };
@@ -1935,9 +1960,10 @@
         `väderfallback -${round(b.weatherFallbackPenalty || 0)}`,
         `restidsstraff -${round(b.drivePenalty)}`,
         `prov-/regnrisk -${round(b.samplePenalty + b.rainQualityPenalty)}`,
+        hasCurrentAlgaeBloom(row.beach) ? `algstraff -${round(b.algaePenalty || 0)}` : "",
         `otillgänglig aktuell kvalitet -${round(b.currentQualityPenalty || 0)}`,
         `bortsorteringspoäng ${Math.round(row.excludeScore)} där service och historik väger extra`
-      ].join("; ");
+      ].filter(Boolean).join("; ");
     }
 
     function rankingReason(row) {
@@ -1957,6 +1983,7 @@
       if (b.missingServicePenalty >= 14) minus.push("toalett/service ej bekräftad");
       if (row.history?.repeatedWeak) minus.push("upprepat svag klassningshistorik");
       if ((b.currentQualityPenalty || 0) > 0) minus.push("aktuell kvalitet otillgänglig");
+      if ((b.algaePenalty || 0) > 0) minus.push(algaeNote(row.beach));
       if (Number.isFinite(row.sampleAge) && row.sampleAge > 21) minus.push(`prov ${row.sampleAge} dagar gammalt`);
       const positive = plus.slice(0, 3).join(", ") || "jämn totalpoäng";
       const negative = minus.slice(0, 2).join(", ");
@@ -1990,8 +2017,19 @@
       const warnings = [];
       const quality = String(row.quality || "").toLowerCase();
       if (row.beach.advice.length || quality.includes("otjän")) warnings.push("Varning: otjänligt vatten eller aktiv avrådan.");
+      if (hasCurrentAlgaeBloom(row.beach)) warnings.push(`Varning: algstatus i senaste prov: ${latestAlgaeText(row.beach)}.`);
       if (row.window.thunder) warnings.push("Varning: åska i badfönstret.");
       return warnings;
+    }
+
+    function displayDescription(beach) {
+      const text = [beach.profile?.summary, beach.description].filter(Boolean).join(" ");
+      if (hasCurrentAlgaeBloom(beach)) return text.slice(0, 900);
+      return text
+        .split(/(?<=[.!?])\s+/)
+        .filter((sentence) => !/algförekomst|algblomning|cyanobakter|cyanorisk|blågrön/i.test(sentence))
+        .join(" ")
+        .slice(0, 900);
     }
 
     function beachCard(row, rank, categoryKey) {
@@ -1999,7 +2037,7 @@
       const klass = row.beach.advice.length ? "bad" : row.quality.toLowerCase().includes("anmärkning") ? "warn" : "good";
       const tags = row.services.length ? row.services : ["Service ej hittad i texten"];
       const latestDate = dateOnly(b.latestResult?.takenAt);
-      const description = [b.profile?.summary, b.description].filter(Boolean).join(" ").slice(0, 900);
+      const description = displayDescription(b);
       const municipalityContact = contactText(b.profile?.bathingWater?.municipality?.contactInfo || b.profile?.municipality?.contactInfo);
       const supervisoryContact = contactText(b.profile?.supervisoryAuthority?.contactInfo);
       const warnings = warningMessages(row);
@@ -2053,7 +2091,7 @@
                   <div class="detail-box"><b>Poängförklaring</b>${escapeHtml(scoreBreakdownText(row))}</div>
                   <div class="detail-box"><b>Vattenkvalitet</b>${escapeHtml(row.quality)}. ${escapeHtml(adviceText(b))}</div>
                   <div class="detail-box"><b>Datakoll</b>${escapeHtml(dataFlags)}.</div>
-                  <div class="detail-box"><b>Kvalitetsrisk idag</b>${escapeHtml(qualityCaution(b, row.window))}</div>
+                  <div class="detail-box"><b>Kvalitetsnotering</b>${escapeHtml(qualityCaution(b, row.window))}</div>
                   <div class="detail-box"><b>Väderläge</b>${escapeHtml(weatherLabel(row.window))} under valt badfönster. Åska: ${row.window.thunder ? "ja" : "nej"}, regn under bad ${round(row.window.rain)} mm, regn före bad ${round(row.window.preRain)} mm.</div>
                   <div class="detail-box"><b>Vattentemperatur</b>${round(row.waterTemp)} C. Källa: ${escapeHtml(waterSourceLabel(row))}.</div>
                   <div class="detail-box"><b>Senaste prov</b>${latestDate}. ${escapeHtml(sampleInfo)}. Rådata: E. coli ${escapeHtml(String(b.latestResult?.escherichiaColiPrefix || ""))}${escapeHtml(String(b.latestResult?.escherichiaColiCount ?? "-"))}, enterokocker ${escapeHtml(String(b.latestResult?.intestinalEnterococciPrefix || ""))}${escapeHtml(String(b.latestResult?.intestinalEnterococciCount ?? "-"))}. Alger: ${escapeHtml(b.latestResult?.algalIdText || "ej hittat")}.</div>
