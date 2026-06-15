@@ -17,7 +17,8 @@ function extractSharedCode(html) {
   }
   return script.slice(start, end)
     .replace(/const FORCE_OFFLINE = [^\n]+;/, "const FORCE_OFFLINE = false;")
-    .replace(/const FORCE_FALLBACK = [^\n]+;/, "const FORCE_FALLBACK = false;");
+    .replace(/const FORCE_FALLBACK = [^\n]+;/, "const FORCE_FALLBACK = false;")
+    .replace(/controller\.abort\(\), 9000\)/g, "controller.abort(), 30000)");
 }
 
 async function loadSharedRuntime() {
