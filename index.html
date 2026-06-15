@@ -550,7 +550,7 @@
       </div>
       <div class="status">
         <span id="statusPill" class="pill warn">Laddar data</span>
-        <span id="countPill" class="pill">0 stränder</span>
+        <span id="countPill" class="pill">Räknar topp 100</span>
       </div>
     </header>
 
@@ -2054,7 +2054,7 @@
       renderMunicipalityOverview(rows);
       renderNotes(rows, state.raw.length, removedRows, unscoredRemovedCount, driveExcludedCount);
       buildCsv(rows);
-      $("countPill").textContent = `${rows.length} bästa av ${state.raw.length} stränder`;
+      $("countPill").textContent = `${rows.length} bästa stränder`;
       $("statusPill").className = state.sourceMode === "live" ? "pill good" : "pill warn";
       $("statusPill").textContent = state.sourceMode === "cache"
         ? `Cache från ${from.name}`
@@ -2077,7 +2077,7 @@
         state.raw = beaches;
         state.sourceMode = "live";
         state.cachedAt = null;
-        $("countPill").textContent = `${state.raw.length} stränder`;
+        $("countPill").textContent = `Räknar topp 100 av ${state.raw.length}`;
         await enrichBeaches(state.raw);
         const initialRanking = rankAndRender();
         saveCache();
@@ -2110,7 +2110,7 @@
             state.raw = fallbackBeaches;
             state.sourceMode = "fallback";
             state.cachedAt = null;
-            $("countPill").textContent = `${state.raw.length} stränder`;
+            $("countPill").textContent = `Räknar topp 100 av ${state.raw.length}`;
             rankAndRender();
             enrichBeaches(state.raw).then(() => {
               rankAndRender();
