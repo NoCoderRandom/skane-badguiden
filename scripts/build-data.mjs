@@ -103,6 +103,28 @@ function restoreExistingHavData(beaches, existing) {
   }
 }
 
+function restoreExistingStableData(beaches, existing) {
+  const previousById = new Map((existing?.beaches || []).map((beach) => [beach.id, beach]));
+  let restoredProfiles = 0;
+  let restoredService = 0;
+  beaches.forEach((beach) => {
+    const previous = previousById.get(beach.id);
+    if (!previous) return;
+    if (previous.profile) {
+      beach.profile = previous.profile;
+      restoredProfiles += 1;
+    }
+    if (previous.serviceCheckedAt) {
+      beach.nearbyAmenities = Array.isArray(previous.nearbyAmenities) ? previous.nearbyAmenities : [];
+      beach.serviceCheckedAt = previous.serviceCheckedAt;
+      restoredService += 1;
+    }
+  });
+  if (restoredProfiles || restoredService) {
+    console.warn(`Reused stable data: profiles=${restoredProfiles}, service=${restoredService}`);
+  }
+}
+
 async function main() {
   const startedAt = new Date();
   const runtime = await loadSharedRuntime();
@@ -112,6 +134,7 @@ async function main() {
     beaches = await runtime.loadBathingWaters();
     beaches.sort((a, b) => a.name.localeCompare(b.name, "sv-SE"));
     runtime.state.skaneCount = beaches.length;
+    restoreExistingStableData(beaches, existing);
     await runtime.enrichBeaches(beaches);
     restoreExistingHavData(beaches, existing);
   } catch (error) {
@@ -128,6 +151,7 @@ async function main() {
       }));
       beaches.sort((a, b) => a.name.localeCompare(b.name, "sv-SE"));
       runtime.state.skaneCount = existing.skaneCount || beaches.length;
+      restoreExistingStableData(beaches, existing);
       await runtime.enrichBeaches(beaches);
       restoreExistingHavData(beaches, existing);
     } else {
@@ -138,13 +162,18 @@ async function main() {
   runtime.state.raw = beaches;
 
   try {
-    await Promise.race([
-      runtime.loadNearbyAmenities(beaches),
-      runtime.timeoutAfter(180000, "OSM-service tog för lång tid i databygget")
-    ]);
+    const serviceCandidates = beaches.filter((beach) => !beach.serviceCheckedAt);
+    if (serviceCandidates.length) {
+      await Promise.race([
+        runtime.loadNearbyAmenities(serviceCandidates),
+        runtime.timeoutAfter(180000, "OSM-service tog för lång tid i databygget")
+      ]);
+    }
   } catch (error) {
     console.warn(error.message);
   }
+
+  runtime.state.osmAmenityCount = beaches.reduce((sum, beach) => sum + (Array.isArray(beach.nearbyAmenities) ? beach.nearbyAmenities.length : 0), 0);
 
   const payload = {
     schemaVersion: 1,
