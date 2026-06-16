@@ -1359,6 +1359,11 @@
       return timeSlotInfo(value).label;
     }
 
+    function timeSlotRangeLabel(value) {
+      const slot = timeSlotInfo(value);
+      return `${slot.label} ${String(slot.start).padStart(2, "0")}-${String(slot.end).padStart(2, "0")}`;
+    }
+
     function arrivalRange(dayIndex, timeSlot) {
       const now = new Date();
       const slot = timeSlotInfo(timeSlot);
@@ -1813,12 +1818,33 @@
       return `<div class="day-strip" aria-label="Jämför vistelse 2 till 4 timmar">${chips}</div>`;
     }
 
-    function renderBest(rows) {
+    function selectedTimeTooLate(options) {
+      if (options.dayIndex !== 0) return false;
+      const from = STARTS[options.start];
+      const beaches = state.raw.filter((beach) => options.categoryFilter === "all" || beachCategory(beach) === options.categoryFilter);
+      const drives = beaches.map((beach) => driveMinutes(from, beach)).filter(Number.isFinite);
+      const minDrive = drives.length ? Math.min(...drives) : 0;
+      return new Date(Date.now() + minDrive * 60000) > arrivalRange(options.dayIndex, options.timeSlot).latest;
+    }
+
+    function noResultsReason(options, rows, visibleRows) {
+      if (selectedTimeTooLate(options)) {
+        return `${timeSlotRangeLabel(options.timeSlot)} idag är redan för sent från ${STARTS[options.start].name}. Välj en senare badtid eller Imorgon.`;
+      }
+      if (!rows.length) {
+        return `Inga stränder hade komplett vattentemperatur och väderfönster för ${timeSlotRangeLabel(options.timeSlot).toLowerCase()} med de här valen.`;
+      }
+      if (!visibleRows.length && options.search) return `Ingen strand matchar sökningen "${options.search}".`;
+      if (!visibleRows.length && options.categoryFilter !== "all") return `Inga ${categoryTitle(options.categoryFilter).toLowerCase()} matchar de här valen.`;
+      return "Ingen strand passade de här valen.";
+    }
+
+    function renderBest(rows, emptyReason = "Ingen strand passade de här valen.") {
       const overall = rows[0];
       const sea = rows.find((row) => beachCategory(row.beach) === "sea");
       const lake = rows.find((row) => beachCategory(row.beach) === "lake");
       if (!overall) {
-        $("bestCard").innerHTML = `<div><span class="pill">Ingen träff</span><h2>Ingen strand passade filtren.</h2></div>`;
+        $("bestCard").innerHTML = `<div><span class="pill">Ingen träff</span><h2>Ingen strand passade valen.</h2><p>${escapeHtml(emptyReason)}</p></div>`;
         return;
       }
       const winnerBlock = (row, title) => row ? `
@@ -1871,10 +1897,10 @@
       return haystack.includes(query);
     }
 
-    function renderRows(rows) {
+    function renderRows(rows, emptyReason = "") {
       const list = $("beachList");
       if (!rows.length) {
-        list.innerHTML = `<div class="empty">Inga stränder matchar restidsfiltret. Höj max restid eller välj annan startpunkt.</div>`;
+        list.innerHTML = `<div class="empty">${escapeHtml(emptyReason || "Inga stränder kan räknas med de här valen.")}</div>`;
         return;
       }
       const groups = {
@@ -1887,6 +1913,8 @@
       const categoryKeys = filter === "all" ? ["sea", "lake"] : [filter];
       list.innerHTML = categoryKeys.map((key) => {
         const groupRows = groups[key].filter((row) => rowMatchesSearch(row, search));
+        const defaultEmpty = `Inga ${categoryTitle(key).toLowerCase()} matchar filtren${search ? ` och sökningen "${search}"` : ""}.`;
+        const emptyText = filter === "all" ? defaultEmpty : (emptyReason || defaultEmpty);
         return `
           <section class="category" aria-label="${categoryTitle(key)}">
             <div class="category-head">
@@ -1895,7 +1923,7 @@
               </div>
               <span class="pill">${groupRows.length} visas</span>
             </div>
-            ${groupRows.length ? groupRows.map((row, index) => beachCard(row, index + 1, key)).join("") : `<div class="empty">Inga ${categoryTitle(key).toLowerCase()} matchar filtren${search ? ` och sökningen "${escapeHtml(search)}"` : ""}.</div>`}
+            ${groupRows.length ? groupRows.map((row, index) => beachCard(row, index + 1, key)).join("") : `<div class="empty">${escapeHtml(emptyText)}</div>`}
           </section>`;
       }).join("");
     }
@@ -2274,9 +2302,10 @@
       const from = STARTS[options.start];
       const { rows, scored, removedRows, unscoredRemovedCount, driveExcludedCount } = evaluateRanking(options);
       const visibleRows = visibleRowsForFilters(rows);
+      const emptyReason = noResultsReason(options, rows, visibleRows);
       state.rows = rows;
-      renderBest(visibleRows);
-      renderRows(rows);
+      renderBest(visibleRows, emptyReason);
+      renderRows(rows, emptyReason);
       renderMunicipalityOverview(rows);
       renderNotes(rows, state.raw.length, removedRows, unscoredRemovedCount, driveExcludedCount);
       buildCsv(visibleRows);
