@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const htmlPath = resolve(root, "index.html");
 const outputPath = resolve(root, "data.json");
-const REQUEST_TIMEOUT_MS = 45000;
+const REQUEST_TIMEOUT_MS = 15000;
 const REQUEST_TIMEOUT_SECONDS = Math.round(REQUEST_TIMEOUT_MS / 1000);
 
 function nodeFetch(url, options = {}) {
@@ -57,7 +57,8 @@ function extractSharedCode(html) {
   return script.slice(start, end)
     .replace(/const FORCE_OFFLINE = [^\n]+;/, "const FORCE_OFFLINE = false;")
     .replace(/const FORCE_FALLBACK = [^\n]+;/, "const FORCE_FALLBACK = false;")
-    .replace(/controller\.abort\(\), 9000\)/g, `controller.abort(), ${REQUEST_TIMEOUT_MS})`);
+    .replace(/controller\.abort\(\), 9000\)/g, `controller.abort(), ${REQUEST_TIMEOUT_MS})`)
+    .replace(/for \(let attempt = 0; attempt < 3; attempt \+= 1\)/g, "for (let attempt = 0; attempt < 1; attempt += 1)");
 }
 
 async function loadSharedRuntime() {
