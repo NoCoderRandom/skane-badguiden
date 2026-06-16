@@ -2337,6 +2337,11 @@
       return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
     }
 
+    function resultCountText(visibleRows, rows) {
+      if (visibleRows.length === rows.length) return `${visibleRows.length} möjliga`;
+      return `${visibleRows.length} visas av ${rows.length} möjliga`;
+    }
+
     function rankAndRender() {
       const options = cfg();
       const from = STARTS[options.start];
@@ -2349,10 +2354,8 @@
       renderMunicipalityOverview(rows);
       renderNotes(rows, state.raw.length, removedRows, unscoredRemovedCount, driveExcludedCount);
       buildCsv(visibleRows);
-      $("sortSummary").textContent = `Sortering: ${sortSummaryText(options)}. Regn, åska och otjänligt vatten pressas ned innan listan sorteras.`;
-      $("countPill").textContent = visibleRows.length === rows.length
-        ? `${rows.length} stränder`
-        : `${visibleRows.length} visas av ${rows.length}`;
+      $("sortSummary").textContent = `Visar bad med vattentemperatur och komplett badfönster för ${dayLabel(options.dayIndex).toLowerCase()} ${timeSlotLabel(options.timeSlot).toLowerCase()}. Sortering: ${sortSummaryText(options)}.`;
+      $("countPill").textContent = resultCountText(visibleRows, rows);
       $("statusPill").className = state.sourceMode === "live" || state.sourceMode === "static" ? "pill good" : "pill warn";
       $("statusPill").textContent = state.sourceMode === "cache"
         ? `Cache från ${from.name}`
