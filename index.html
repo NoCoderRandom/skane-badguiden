@@ -38,7 +38,10 @@
 
     button, input, select { font: inherit; }
 
-    button {
+    button, .nav-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
       border: 1px solid var(--sea);
       background: var(--sea);
       color: white;
@@ -47,9 +50,11 @@
       padding: .65rem .9rem;
       font-weight: 900;
       cursor: pointer;
+      text-decoration: none;
+      line-height: 1.15;
     }
 
-    button.secondary {
+    button.secondary, .nav-button.secondary {
       background: white;
       color: var(--sea);
       border-color: var(--line);
@@ -514,6 +519,7 @@
         <p class="lead">Rankingen bygger på väder, vattentemperatur, vattenkvalitet och alger. Service och restid visas bara som information.</p>
       </div>
       <div class="status">
+        <a class="nav-button secondary" href="karta.html">Karta</a>
         <span id="statusPill" class="pill warn">Laddar data</span>
         <span id="countPill" class="pill">Räknar topp 100</span>
       </div>
@@ -2160,7 +2166,7 @@
                   <div class="detail-box"><b>Historikbedömning</b>${escapeHtml(row.history?.text || "klassningshistorik saknas")}.</div>
                   <div class="detail-box"><b>Service</b>${escapeHtml(serviceSummary(row.services))}</div>
                   <div class="detail-box"><b>Nära service från OSM</b>${escapeHtml(nearbyAmenityText(b))}</div>
-                  <div class="detail-box"><b>Servicekontroll</b>${escapeHtml(serviceCheck)}. Saknad service påverkar vilka 75 stränder som sorteras bort.</div>
+                  <div class="detail-box"><b>Servicekontroll</b>${escapeHtml(serviceCheck)}. Service visas som fakta och påverkar inte rankningen.</div>
                   <div class="detail-box"><b>1-3 dagar</b>${escapeHtml(outlook)}</div>
                   <div class="detail-box"><b>Badperiod</b>${escapeHtml(bathingSeasonText(b))}</div>
                   <div class="detail-box"><b>Kontakt</b>${escapeHtml(municipalityContact)}<br>${escapeHtml(supervisoryContact)}</div>
