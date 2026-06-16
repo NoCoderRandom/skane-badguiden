@@ -1978,8 +1978,6 @@
         beach.name,
         beach.municipality,
         beach.type,
-        beach.description,
-        beach.profile?.summary,
         ...serviceTags(beach)
       ].filter(Boolean).join(" ").toLowerCase();
       return haystack.includes(query);
