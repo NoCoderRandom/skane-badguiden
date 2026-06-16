@@ -303,6 +303,27 @@
       border-right: 1px solid var(--line);
     }
 
+    .rank.avoid-rank {
+      background: #fde2e2;
+      color: #a43434;
+      font-size: .95rem;
+      line-height: 1.1;
+      text-align: center;
+      padding: 8px;
+    }
+
+    .avoid-group {
+      display: grid;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .avoid-group h4 {
+      margin: 0;
+      color: #a43434;
+      font-size: 1rem;
+    }
+
     .card-body {
       padding: 13px;
       display: grid;
@@ -1759,10 +1780,27 @@
       return 0;
     }
 
+    function shouldAvoidRow(row) {
+      const quality = String(row.quality || "").toLowerCase();
+      return row.score <= 0
+        || row.beach.advice.length > 0
+        || quality.includes("otjän")
+        || hasCurrentAlgaeBloom(row.beach)
+        || row.window?.thunder;
+    }
+
+    function avoidSortWeight(row) {
+      if (!shouldAvoidRow(row)) return 0;
+      if (row.score <= 0 || hasCurrentAlgaeBloom(row.beach) || row.beach.advice.length) return 20000;
+      return 12000;
+    }
+
     function sortRows(rows, sortKeys) {
       const keys = [...new Set((sortKeys?.length ? sortKeys : ["score_desc"]).filter((key) => key && key !== "none"))];
       if (!keys.includes("score_desc")) keys.push("score_desc");
       return rows.slice().sort((a, b) => {
+        const avoidResult = avoidSortWeight(a) - avoidSortWeight(b);
+        if (Math.abs(avoidResult) > 0.0001) return avoidResult;
         const rainResult = rainSortWeight(a) - rainSortWeight(b);
         if (Math.abs(rainResult) > 0.0001) return rainResult;
         for (const key of keys) {
@@ -1872,6 +1910,8 @@
       if (!rows.length) {
         return `Inga stränder hade komplett vattentemperatur och väderfönster för ${timeSlotRangeLabel(options.timeSlot).toLowerCase()} med de här valen.`;
       }
+      const matchingRows = visibleRowsForFilters(rows, { includeAvoid: true });
+      if (!visibleRows.length && matchingRows.length) return "Alla träffar har 0 poäng eller aktiv varning och ligger under Avstå idag.";
       if (!visibleRows.length && options.search) return `Ingen strand matchar sökningen "${options.search}".`;
       if (!visibleRows.length && options.categoryFilter !== "all") return `Inga ${categoryTitle(options.categoryFilter).toLowerCase()} matchar de här valen.`;
       return "Ingen strand passade de här valen.";
@@ -1951,25 +1991,40 @@
       const categoryKeys = filter === "all" ? ["sea", "lake"] : [filter];
       list.innerHTML = categoryKeys.map((key) => {
         const groupRows = groups[key].filter((row) => rowMatchesSearch(row, search));
+        const recommendedRows = groupRows.filter((row) => !shouldAvoidRow(row));
+        const avoidRows = groupRows.filter((row) => shouldAvoidRow(row));
         const defaultEmpty = `Inga ${categoryTitle(key).toLowerCase()} matchar filtren${search ? ` och sökningen "${search}"` : ""}.`;
         const emptyText = filter === "all" ? defaultEmpty : (emptyReason || defaultEmpty);
+        const countText = avoidRows.length ? `${recommendedRows.length} rekommenderas · ${avoidRows.length} avstå` : `${recommendedRows.length} visas`;
+        const recommendedHtml = recommendedRows.length
+          ? recommendedRows.map((row, index) => beachCard(row, index + 1, key)).join("")
+          : avoidRows.length
+            ? `<div class="empty">Inga rekommenderade ${categoryTitle(key).toLowerCase()} med de här valen.</div>`
+            : `<div class="empty">${escapeHtml(emptyText)}</div>`;
+        const avoidHtml = avoidRows.length ? `
+          <div class="avoid-group">
+            <h4>Avstå idag</h4>
+            ${avoidRows.map((row) => beachCard(row, "Avstå", key)).join("")}
+          </div>` : "";
         return `
           <section class="category" aria-label="${categoryTitle(key)}">
             <div class="category-head">
               <div>
                 <h3>${categoryTitle(key)}</h3>
               </div>
-              <span class="pill">${groupRows.length} visas</span>
+              <span class="pill">${countText}</span>
             </div>
-            ${groupRows.length ? groupRows.map((row, index) => beachCard(row, index + 1, key)).join("") : `<div class="empty">${escapeHtml(emptyText)}</div>`}
+            ${recommendedHtml}
+            ${avoidHtml}
           </section>`;
       }).join("");
     }
 
-    function visibleRowsForFilters(rows) {
+    function visibleRowsForFilters(rows, view = {}) {
       const options = cfg();
-      return (options.categoryFilter === "all" ? rows : rows.filter((row) => beachCategory(row.beach) === options.categoryFilter))
+      const filtered = (options.categoryFilter === "all" ? rows : rows.filter((row) => beachCategory(row.beach) === options.categoryFilter))
         .filter((row) => rowMatchesSearch(row, options.search));
+      return view.includeAvoid ? filtered : filtered.filter((row) => !shouldAvoidRow(row));
     }
 
     function renderMunicipalityOverview(rows) {
@@ -2165,9 +2220,11 @@
       const dataFlags = dataQualityFlags(row);
       const reason = rankingReason(row);
       const sampleInfo = sampleStatus(b, row.sampleAge);
+      const avoid = shouldAvoidRow(row);
+      const rankText = typeof rank === "number" ? `#${rank}` : rank;
       return `
         <article class="beach-card">
-          <div class="rank">#${rank}</div>
+          <div class="rank ${avoid ? "avoid-rank" : ""}">${escapeHtml(rankText)}</div>
           <div class="card-body">
             <div class="card-head">
               <div>
@@ -2240,13 +2297,14 @@
 
     function renderNotes(rows, allCount, removedRows = [], unscoredRemovedCount = 0, driveExcludedCount = 0) {
       const visibleRows = visibleRowsForFilters(rows);
+      const allVisibleRows = visibleRowsForFilters(rows, { includeAvoid: true });
+      const avoidVisibleCount = allVisibleRows.length - visibleRows.length;
       const seaCount = visibleRows.filter((row) => beachCategory(row.beach) === "sea").length;
       const lakeCount = visibleRows.filter((row) => beachCategory(row.beach) === "lake").length;
       const removedCount = removedRows.length;
       const filter = cfg().categoryFilter;
       const search = cfg().search;
-      const visibleCount = (filter === "all" ? rows : rows.filter((row) => beachCategory(row.beach) === filter))
-        .filter((row) => rowMatchesSearch(row, search)).length;
+      const visibleCount = allVisibleRows.length;
       const exportCount = visibleRows.length;
       const removedExamples = removedRows
         .slice()
@@ -2275,7 +2333,7 @@
       $("runNotes").innerHTML = `
         <p><b>Data uppdaterad:</b> ${formatDataTime(state.cachedAt)}${staleCacheText}. Sidan visad ${new Date().toLocaleString("sv-SE")}.</p>
         <p><b>Datastatus:</b> ${escapeHtml(sourceText)}</p>
-        <p><b>Urval:</b> ${state.skaneCount || allCount} skånska badplatser hittades. Sidan analyserar ${allCount}; ${escapeHtml(limitText)}. Den visar/exporterar ${exportCount} stränder i aktuell vy: ${seaCount} havsstränder och ${lakeCount} sjöstränder/inlandsvatten.</p>
+        <p><b>Urval:</b> ${state.skaneCount || allCount} skånska badplatser hittades. Sidan analyserar ${allCount}; ${escapeHtml(limitText)}. Den rekommenderar/exporterar ${exportCount} stränder i aktuell vy: ${seaCount} havsstränder och ${lakeCount} sjöstränder/inlandsvatten.${avoidVisibleCount ? ` ${avoidVisibleCount} bad visas separat under Avstå idag.` : ""}</p>
         <p><b>Filter och sortering:</b> ${filter === "all" ? "alla kategorier" : `${categoryTitle(filter)}`}, badtid ${escapeHtml(timeSlotLabel(cfg().timeSlot).toLowerCase())}${search ? `, sökning "${escapeHtml(search)}"` : ""}; sorterat på ${escapeHtml(sortSummaryText())}. ${visibleCount} kort syns.</p>
         ${removedCount ? `<p><b>Bortsorterat:</b> ${removedCount} bad hålls utanför topp 100 på grund av svagare kvalitet, service, historik eller väder.</p>` : ""}
         ${removedExampleHtml}
@@ -2337,9 +2395,12 @@
       return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
     }
 
-    function resultCountText(visibleRows, rows) {
-      if (visibleRows.length === rows.length) return `${visibleRows.length} möjliga`;
-      return `${visibleRows.length} visas av ${rows.length} möjliga`;
+    function resultCountText(recommendedRows, rows) {
+      const allVisibleRows = visibleRowsForFilters(rows, { includeAvoid: true });
+      const avoidCount = allVisibleRows.length - recommendedRows.length;
+      if (avoidCount > 0) return `${recommendedRows.length} rekommenderas`;
+      if (recommendedRows.length === allVisibleRows.length) return `${recommendedRows.length} möjliga`;
+      return `${recommendedRows.length} visas av ${allVisibleRows.length} möjliga`;
     }
 
     function rankAndRender() {
