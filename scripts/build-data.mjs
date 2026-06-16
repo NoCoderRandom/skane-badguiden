@@ -77,6 +77,32 @@ async function loadSharedRuntime() {
   return factory();
 }
 
+function restoreExistingHavData(beaches, existing) {
+  const previousById = new Map((existing?.beaches || []).map((beach) => [beach.id, beach]));
+  let restoredProfiles = 0;
+  let restoredResults = 0;
+  let restoredForecasts = 0;
+  beaches.forEach((beach) => {
+    const previous = previousById.get(beach.id);
+    if (!previous) return;
+    if (!beach.profile && previous.profile) {
+      beach.profile = previous.profile;
+      restoredProfiles += 1;
+    }
+    if (!beach.latestResult && previous.latestResult) {
+      beach.latestResult = previous.latestResult;
+      restoredResults += 1;
+    }
+    if (!beach.waterForecast?.waterForecasts?.length && previous.waterForecast?.waterForecasts?.length) {
+      beach.waterForecast = previous.waterForecast;
+      restoredForecasts += 1;
+    }
+  });
+  if (restoredProfiles || restoredResults || restoredForecasts) {
+    console.warn(`Restored existing HaV data where refresh was missing: profiles=${restoredProfiles}, results=${restoredResults}, forecasts=${restoredForecasts}`);
+  }
+}
+
 async function main() {
   const startedAt = new Date();
   const runtime = await loadSharedRuntime();
@@ -87,6 +113,7 @@ async function main() {
     beaches.sort((a, b) => a.name.localeCompare(b.name, "sv-SE"));
     runtime.state.skaneCount = beaches.length;
     await runtime.enrichBeaches(beaches);
+    restoreExistingHavData(beaches, existing);
   } catch (error) {
     if (existing?.beaches?.length) {
       console.warn(`Could not refresh full beach list, reusing existing list and refreshing details: ${error.message}`);
@@ -102,6 +129,7 @@ async function main() {
       beaches.sort((a, b) => a.name.localeCompare(b.name, "sv-SE"));
       runtime.state.skaneCount = existing.skaneCount || beaches.length;
       await runtime.enrichBeaches(beaches);
+      restoreExistingHavData(beaches, existing);
     } else {
       throw error;
     }
