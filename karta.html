@@ -638,13 +638,6 @@
       return `E. coli ${ecoli}, enterokocker ${entero}`;
     }
 
-    function seasonText(beach) {
-      const start = beach.bathingSeason?.startsAt;
-      const end = beach.bathingSeason?.endsAt;
-      if (!start && !end) return "Uppgift saknas";
-      return `${formatDate(start)} till ${formatDate(end)}`;
-    }
-
     function renderSelected(beach) {
       if (!beach) {
         $("selectedPanel").innerHTML = `<div class="empty">Ingen badplats matchar filtren.</div>`;
@@ -653,9 +646,7 @@
       const quality = qualityKind(beach);
       const typeClass = isInland(beach) ? "lake" : "sea";
       const services = toArray(beach.services);
-      const classifications = toArray(beach.classifications);
       const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${beach.lat},${beach.lon}`)}`;
-      const municipalityUrl = normalizeLink(beach.municipalityUrl || beach.contact?.url);
       $("selectedPanel").innerHTML = `
         <div class="selected-head">
           <div>
@@ -681,13 +672,6 @@
         <div class="detail-grid">
           <div>
             <p class="copy">${escapeHtml(beach.description || "Ingen beskrivning i källdatan.")}</p>
-            <div class="facts">
-              <div class="fact"><b>Badperiod</b><span>${escapeHtml(seasonText(beach))}</span></div>
-              <div class="fact"><b>Klassning</b><span>${escapeHtml(classifications.join(", ") || "Uppgift saknas")}</span></div>
-              <div class="fact"><b>Kontakt</b><span>${escapeHtml(beach.contact?.email || beach.contact?.phone || "Uppgift saknas")}</span></div>
-              <div class="fact"><b>Koordinat</b><span>${escapeHtml(`${Number(beach.lat).toFixed(5)}, ${Number(beach.lon).toFixed(5)}`)}</span></div>
-            </div>
-            ${municipalityUrl ? `<p class="source"><a href="${escapeHtml(municipalityUrl)}" target="_blank" rel="noopener">Kommunens sida</a></p>` : ""}
           </div>
           <div class="image-box">${imageHtml(beach)}</div>
         </div>
