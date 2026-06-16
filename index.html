@@ -732,6 +732,11 @@
       return finite.length ? Math.max(...finite) : null;
     }
 
+    function meanFinite(values) {
+      const finite = values.filter(Number.isFinite);
+      return finite.length ? finite.reduce((sum, value) => sum + value, 0) / finite.length : null;
+    }
+
     function isPlausibleWaterTemp(value) {
       return Number.isFinite(value) && value >= 4 && value <= 35;
     }
@@ -1314,35 +1319,22 @@
     }
 
     function bestWaterTemp(beach, dayIndex, startHour, endHour) {
-      const hourDistanceToWindow = (hour) => {
-        if (hour >= startHour && hour <= endHour) return 0;
-        return hour < startHour ? startHour - hour : hour - endHour;
-      };
       const havForecasts = dayIndex === 0 ? toArray(beach.waterForecast?.waterForecasts)
         .map((x) => ({ hour: Number(x.measHour), temp: parseNumber(x.waterTemp) }))
         .filter((x) => Number.isFinite(x.hour) && isPlausibleWaterTemp(x.temp))
-        .map((x) => ({ ...x, distance: hourDistanceToWindow(x.hour) })) : [];
-      const havNearby = havForecasts.filter((x) => x.distance <= 4);
-      const havBest = (havNearby.length ? havNearby : havForecasts).length
-        ? (havNearby.length ? havNearby : havForecasts).slice().sort((a, b) => a.distance - b.distance || b.temp - a.temp)[0]
-        : null;
-      const havSource = havBest ? (havNearby.length ? "HaV vattenprognos" : "HaV dygnsprognos") : null;
+        : [];
+      const havDailyTemp = meanFinite(havForecasts.map((x) => x.temp));
       const marine = beach.marine?.hourly;
-      let marineBest = null;
+      let marineDaily = null;
       if (marine?.time && marine?.sea_surface_temperature) {
         const values = marine.time.map((time, i) => ({ time: new Date(time), temp: marine.sea_surface_temperature[i] }))
-          .filter((x) => dayOffset(x.time) === dayIndex && x.time.getHours() >= startHour && x.time.getHours() <= endHour)
+          .filter((x) => dayOffset(x.time) === dayIndex)
           .filter((x) => isPlausibleWaterTemp(x.temp));
-        marineBest = values.length ? values.slice().sort((a, b) => b.temp - a.temp)[0] : null;
-        if (Number.isFinite(havBest?.temp) && Number.isFinite(marineBest?.temp)) {
-          return havBest.temp >= marineBest.temp
-            ? { value: havBest.temp, source: havSource, sourceTime: `${dayLabel(dayIndex)} kl ${String(havBest.hour).padStart(2, "0")}` }
-            : { value: marineBest.temp, source: "Open-Meteo Marine", sourceTime: marineBest.time.toISOString() };
-        }
-        if (Number.isFinite(havBest?.temp)) return { value: havBest.temp, source: havSource, sourceTime: `${dayLabel(dayIndex)} kl ${String(havBest.hour).padStart(2, "0")}` };
-        if (Number.isFinite(marineBest?.temp)) return { value: marineBest.temp, source: "Open-Meteo Marine", sourceTime: marineBest.time.toISOString() };
+        const marineDailyTemp = meanFinite(values.map((x) => x.temp));
+        if (Number.isFinite(marineDailyTemp)) marineDaily = { value: marineDailyTemp, count: values.length };
       }
-      if (Number.isFinite(havBest?.temp)) return { value: havBest.temp, source: havSource, sourceTime: `${dayLabel(dayIndex)} kl ${String(havBest.hour).padStart(2, "0")}` };
+      if (Number.isFinite(havDailyTemp)) return { value: havDailyTemp, source: "HaV dygnsprognos", sourceTime: `${dayLabel(dayIndex)} (${havForecasts.length} värden)` };
+      if (marineDaily) return { value: marineDaily.value, source: "Open-Meteo Marine", sourceTime: `${dayLabel(dayIndex)} (${marineDaily.count} värden)` };
       const sampleTemp = parseNumber(beach.latestResult?.waterTemp);
       const sampleAgeHours = sourceAgeHours(beach.latestResult?.takenAt);
       return dayIndex === 0 && isPlausibleWaterTemp(sampleTemp) && Number.isFinite(sampleAgeHours) && sampleAgeHours <= 24
@@ -1364,6 +1356,13 @@
       if (row.waterSource === "HaV dygnsprognos") return `HaV dygnsprognos ${row.waterSourceTime || ""}`.trim();
       if (row.waterSource === "Open-Meteo Marine") return `Marine ${dateOnly(row.waterSourceTime)}`;
       return row.waterSource || "Saknas";
+    }
+
+    function sourceModeLabel(from) {
+      if (state.sourceMode === "cache") return `Cache ${cacheAgeText()} från ${from.name}`;
+      if (state.sourceMode === "static") return `GitHub-cache ${cacheAgeText()}`;
+      if (state.sourceMode === "fallback") return `Reservlista från ${from.name}`;
+      return `Live från ${from.name}`;
     }
 
     function sourceAgeHours(value) {
@@ -2439,14 +2438,8 @@
       buildCsv(visibleRows);
       $("sortSummary").textContent = `Visar bad med vattentemperatur och komplett badfönster för ${periodSummary(options.dayIndex, options.timeSlot)}. Sortering: ${sortSummaryText(options)}.`;
       $("countPill").textContent = resultCountText(visibleRows, rows);
-      $("statusPill").className = state.sourceMode === "live" || state.sourceMode === "static" ? "pill good" : "pill warn";
-      $("statusPill").textContent = state.sourceMode === "cache"
-        ? `Cache från ${from.name}`
-        : state.sourceMode === "static"
-          ? `Data från GitHub-cache`
-          : state.sourceMode === "fallback"
-            ? `Reservlista från ${from.name}`
-            : `Live från ${from.name}`;
+      $("statusPill").className = state.sourceMode === "static" && isCacheOlderThanHours(6) ? "pill warn" : state.sourceMode === "live" || state.sourceMode === "static" ? "pill good" : "pill warn";
+      $("statusPill").textContent = sourceModeLabel(from);
       return { rows, scored, removedRows };
     }
 

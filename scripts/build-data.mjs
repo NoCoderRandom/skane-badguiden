@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const htmlPath = resolve(root, "index.html");
 const outputPath = resolve(root, "data.json");
-const REQUEST_TIMEOUT_MS = 120000;
+const REQUEST_TIMEOUT_MS = 45000;
 const REQUEST_TIMEOUT_SECONDS = Math.round(REQUEST_TIMEOUT_MS / 1000);
 
 function nodeFetch(url, options = {}) {
@@ -79,6 +79,7 @@ async function loadSharedRuntime() {
 async function main() {
   const startedAt = new Date();
   const runtime = await loadSharedRuntime();
+  const existing = JSON.parse(await readFile(outputPath, "utf8").catch(() => "null"));
   let beaches = [];
   try {
     beaches = await runtime.loadBathingWaters();
@@ -86,12 +87,23 @@ async function main() {
     runtime.state.skaneCount = beaches.length;
     await runtime.enrichBeaches(beaches);
   } catch (error) {
-    const existing = JSON.parse(await readFile(outputPath, "utf8").catch(() => "null"));
     if (existing?.beaches?.length) {
-      console.warn(`Could not refresh live data, keeping existing data.json: ${error.message}`);
-      return;
+      console.warn(`Could not refresh full beach list, reusing existing list and refreshing details: ${error.message}`);
+      beaches = existing.beaches.map((beach) => ({
+        ...beach,
+        profile: null,
+        latestResult: null,
+        waterForecast: null,
+        weather: null,
+        marine: null,
+        nearbyAmenities: []
+      }));
+      beaches.sort((a, b) => a.name.localeCompare(b.name, "sv-SE"));
+      runtime.state.skaneCount = existing.skaneCount || beaches.length;
+      await runtime.enrichBeaches(beaches);
+    } else {
+      throw error;
     }
-    throw error;
   }
 
   runtime.state.raw = beaches;
