@@ -657,6 +657,9 @@
     const RAIN_CODES = new Set([51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82]);
     const DEFAULT_MAX_DRIVE = 999;
     const DEFAULT_STAY_HOURS = 3;
+    const PERFECT_WATER_MIN = 20;
+    const PERFECT_AIR_MIN = 24;
+    const PERFECT_WIND_MAX = 6;
     const $ = (id) => document.getElementById(id);
     const state = { raw: [], rows: [], lastCsv: "", sourceMode: "live", cachedAt: null, skaneCount: 0, osmAmenityCount: 0, osmFailedBatches: 0 };
     const URL_FIELDS = {
@@ -1124,6 +1127,11 @@
       return !/ingen|ej bedömt|ej observerad|saknas/.test(text);
     }
 
+    function hasConfirmedNoCurrentAlgae(beach) {
+      const text = latestAlgaeText(beach).toLowerCase();
+      return Boolean(text) && !/saknas|ej bedömt/.test(text) && /ingen|ej observerad/.test(text);
+    }
+
     function algaeNote(beach) {
       if (hasCurrentAlgaeBloom(beach)) return `senaste provet visar alger: ${latestAlgaeText(beach)}`;
       return "";
@@ -1558,6 +1566,30 @@
       return directRain + earlierRain;
     }
 
+    function perfectScoreBlockers(beach, window, waterTemp, qualityLabel, qScore) {
+      const blockers = [];
+      const qualityLower = String(qualityLabel || "").toLowerCase();
+      if (!(waterTemp > PERFECT_WATER_MIN)) blockers.push(`vatten högst ${PERFECT_WATER_MIN} C`);
+      if (!(Number.isFinite(window.air) && window.air > PERFECT_AIR_MIN)) blockers.push(`luft högst ${PERFECT_AIR_MIN} C`);
+      if (!(Number.isFinite(window.wind) && window.wind < PERFECT_WIND_MAX)) blockers.push(`vind minst ${PERFECT_WIND_MAX} m/s`);
+      if ((window.rain || 0) > 0 || window.rainyCode) blockers.push("regn i badfönstret");
+      if ((window.preRain || 0) > 0) blockers.push("regn före badet");
+      if (window.thunder) blockers.push("åska");
+      if (hasCurrentAlgaeBloom(beach)) blockers.push("alger i senaste provet");
+      else if (!hasConfirmedNoCurrentAlgae(beach)) blockers.push("algstatus inte bekräftat fri");
+      if (beach.advice.length || qScore < 100 || /otjän|anmärkning|avrådan|otillgänglig/.test(qualityLower)) blockers.push("vattenkvalitet inte helt tjänlig");
+      return blockers;
+    }
+
+    function perfectScoreCap(blockers) {
+      if (!blockers.length) return 100;
+      let cap = 99;
+      if (blockers.some((item) => /vatten högst|luft högst|vind minst/.test(item))) cap = Math.min(cap, 89);
+      if (blockers.some((item) => /regn/.test(item))) cap = Math.min(cap, 79);
+      if (blockers.some((item) => /åska|alger|algstatus|vattenkvalitet/.test(item))) cap = Math.min(cap, 69);
+      return cap;
+    }
+
     function scoreBeach(beach, cfg) {
       const from = STARTS[cfg.start];
       const drive = driveMinutes(from, beach);
@@ -1591,8 +1623,11 @@
       const samplePenalty = Number.isFinite(sampleAge) ? clamp((sampleAge - 14) * .65, 0, 35) : 35;
       const rainQualityPenalty = rainDownrankPenalty(window);
       const algaePenalty = algaeRiskPenalty(beach);
-      const score = waterScore * .35 + airScore * .25 + rainScore * .20 + windScore * .10 + qScore * .10 + serviceScore - drivePenalty - advicePenalty - samplePenalty - rainQualityPenalty - missingServicePenalty - weakHistoryPenalty - weatherFallbackPenalty - currentQualityPenalty - algaePenalty;
-      const excludeScore = score - missingServicePenalty * 1.15 - weakHistoryPenalty * 1.45 - advicePenalty * .8 - repeatedHistoryPenalty - weatherFallbackPenalty - currentQualityPenalty * 2 - rainQualityPenalty * 1.8 - algaePenalty * 1.4;
+      const rawScore = waterScore * .35 + airScore * .25 + rainScore * .20 + windScore * .10 + qScore * .10 + serviceScore - drivePenalty - advicePenalty - samplePenalty - rainQualityPenalty - missingServicePenalty - weakHistoryPenalty - weatherFallbackPenalty - currentQualityPenalty - algaePenalty;
+      const perfectBlockers = perfectScoreBlockers(beach, window, waterTemp, qualityLabel, qScore);
+      const scoreCap = perfectScoreCap(perfectBlockers);
+      const finalScore = Math.min(clamp(rawScore, 0, 100), scoreCap);
+      const excludeScore = finalScore - missingServicePenalty * 1.15 - weakHistoryPenalty * 1.45 - advicePenalty * .8 - repeatedHistoryPenalty - weatherFallbackPenalty - currentQualityPenalty * 2 - rainQualityPenalty * 1.8 - algaePenalty * 1.4;
       const departAt = new Date(window.arrive.getTime() - drive * 60000);
       const homeAt = new Date(window.leave.getTime() + drive * 60000);
       const totalTripMinutes = drive * 2 + cfg.stayHours * 60;
@@ -1611,9 +1646,12 @@
         samplePenalty,
         rainQualityPenalty,
         algaePenalty,
-        currentQualityPenalty
+        currentQualityPenalty,
+        rawScore,
+        scoreCap,
+        perfectBlockers
       };
-      return { beach, drive, departAt, homeAt, totalTripMinutes, stayHours: cfg.stayHours, sampleAge, window, waterTemp, waterSource: water.source, waterSourceTime, waterSourceAgeHours, wave, services, history, breakdown, excludeScore, score: clamp(score, 0, 100), quality: qualityLabel };
+      return { beach, drive, departAt, homeAt, totalTripMinutes, stayHours: cfg.stayHours, sampleAge, window, waterTemp, waterSource: water.source, waterSourceTime, waterSourceAgeHours, wave, services, history, breakdown, excludeScore, score: finalScore, quality: qualityLabel };
     }
 
     function cfg() {
@@ -2039,6 +2077,7 @@
         `restidsstraff -${round(b.drivePenalty)}`,
         `prov-/regnrisk -${round(b.samplePenalty + b.rainQualityPenalty)}`,
         hasCurrentAlgaeBloom(row.beach) ? `algstraff -${round(b.algaePenalty || 0)}` : "",
+        b.perfectBlockers?.length ? `100-spärr: ${b.perfectBlockers.join(", ")}` : "",
         `otillgänglig aktuell kvalitet -${round(b.currentQualityPenalty || 0)}`,
         `bortsorteringspoäng ${Math.round(row.excludeScore)} där service och historik väger extra`
       ].filter(Boolean).join("; ");
@@ -2063,6 +2102,7 @@
       if (row.history?.repeatedWeak) minus.push("upprepat svag klassningshistorik");
       if ((b.currentQualityPenalty || 0) > 0) minus.push("aktuell kvalitet otillgänglig");
       if ((b.algaePenalty || 0) > 0) minus.push(algaeNote(row.beach));
+      if (b.perfectBlockers?.length && Math.round(row.score) >= 80) minus.push(`100 spärras av ${b.perfectBlockers[0]}`);
       if (Number.isFinite(row.sampleAge) && row.sampleAge > 21) minus.push(`prov ${row.sampleAge} dagar gammalt`);
       const positive = plus.slice(0, 3).join(", ") || "jämn totalpoäng";
       const negative = minus.slice(0, 2).join(", ");
