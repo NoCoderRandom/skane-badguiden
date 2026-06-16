@@ -1398,7 +1398,7 @@
       const slot = timeSlotInfo(timeSlot);
       return {
         earliest: new Date(now.getFullYear(), now.getMonth(), now.getDate() + dayIndex, slot.start, 0, 0),
-        latest: new Date(now.getFullYear(), now.getMonth(), now.getDate() + dayIndex, Math.max(slot.start, slot.end - 1), 0, 0)
+        latest: new Date(now.getFullYear(), now.getMonth(), now.getDate() + dayIndex, slot.end, 0, 0)
       };
     }
 
