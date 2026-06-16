@@ -529,7 +529,7 @@
       </label>
       <label>Badtid
         <select id="timeSlot">
-          <option value="best">Bäst dagtid</option>
+          <option value="best">Bästa tiden</option>
           <option value="morning">Förmiddag 08-11</option>
           <option value="midday">Mitt på dagen 11-14</option>
           <option value="afternoon">Eftermiddag 14-17</option>
@@ -668,7 +668,7 @@
       ystad: { name: "Ystad", lat: 55.429, lon: 13.82 }
     };
     const TIME_SLOTS = {
-      best: { label: "Bäst dagtid", start: 10, end: 17 },
+      best: { label: "Bästa tiden", start: 10, end: 20 },
       morning: { label: "Förmiddag", start: 8, end: 11 },
       midday: { label: "Mitt på dagen", start: 11, end: 14 },
       afternoon: { label: "Eftermiddag", start: 14, end: 17 },
@@ -1393,6 +1393,12 @@
       return `${slot.label} ${String(slot.start).padStart(2, "0")}-${String(slot.end).padStart(2, "0")}`;
     }
 
+    function periodSummary(dayIndex, timeSlot) {
+      const day = dayLabel(dayIndex).toLowerCase();
+      const slot = timeSlotLabel(timeSlot).toLowerCase();
+      return timeSlot === "best" ? `${day}, ${slot}` : `${day} ${slot}`;
+    }
+
     function arrivalRange(dayIndex, timeSlot) {
       const now = new Date();
       const slot = timeSlotInfo(timeSlot);
@@ -1904,6 +1910,9 @@
     }
 
     function noResultsReason(options, rows, visibleRows) {
+      const rawMatches = state.raw.filter((beach) => rawBeachMatchesCurrentFilters(beach, options));
+      if (!rawMatches.length && options.search) return `Ingen strand matchar sökningen "${options.search}".`;
+      if (!rawMatches.length && options.categoryFilter !== "all") return `Inga ${categoryTitle(options.categoryFilter).toLowerCase()} matchar de här valen.`;
       if (selectedTimeTooLate(options)) {
         return `${timeSlotRangeLabel(options.timeSlot)} idag är redan för sent från ${STARTS[options.start].name}. Välj en senare badtid eller Imorgon.`;
       }
@@ -1963,12 +1972,28 @@
       return key === "lake" ? "Sjöstränder" : "Havsstränder";
     }
 
-    function rowMatchesSearch(row, query) {
+    function beachMatchesSearch(beach, query) {
       if (!query) return true;
       const haystack = [
-        row.beach.name,
-        row.beach.municipality,
-        row.beach.type,
+        beach.name,
+        beach.municipality,
+        beach.type,
+        beach.description,
+        beach.profile?.summary,
+        ...serviceTags(beach)
+      ].filter(Boolean).join(" ").toLowerCase();
+      return haystack.includes(query);
+    }
+
+    function rawBeachMatchesCurrentFilters(beach, options) {
+      return (options.categoryFilter === "all" || beachCategory(beach) === options.categoryFilter)
+        && beachMatchesSearch(beach, options.search);
+    }
+
+    function rowMatchesSearch(row, query) {
+      if (!query) return true;
+      if (beachMatchesSearch(row.beach, query)) return true;
+      const haystack = [
         row.quality,
         ...row.services
       ].filter(Boolean).join(" ").toLowerCase();
@@ -2415,7 +2440,7 @@
       renderMunicipalityOverview(rows);
       renderNotes(rows, state.raw.length, removedRows, unscoredRemovedCount, driveExcludedCount);
       buildCsv(visibleRows);
-      $("sortSummary").textContent = `Visar bad med vattentemperatur och komplett badfönster för ${dayLabel(options.dayIndex).toLowerCase()} ${timeSlotLabel(options.timeSlot).toLowerCase()}. Sortering: ${sortSummaryText(options)}.`;
+      $("sortSummary").textContent = `Visar bad med vattentemperatur och komplett badfönster för ${periodSummary(options.dayIndex, options.timeSlot)}. Sortering: ${sortSummaryText(options)}.`;
       $("countPill").textContent = resultCountText(visibleRows, rows);
       $("statusPill").className = state.sourceMode === "live" || state.sourceMode === "static" ? "pill good" : "pill warn";
       $("statusPill").textContent = state.sourceMode === "cache"
