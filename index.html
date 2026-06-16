@@ -511,7 +511,7 @@
     <header>
       <div>
         <h1>Skånes bästa bad idag</h1>
-        <p class="lead">Rankar skånska bad med faktisk vattentemperatur, väder, kvalitet, restid och bekräftad service.</p>
+        <p class="lead">Rankar skånska bad med faktisk vattentemperatur, väder, kvalitet och bekräftad service. Restid visas som information.</p>
       </div>
       <div class="status">
         <span id="statusPill" class="pill warn">Laddar data</span>
@@ -529,7 +529,7 @@
       </label>
       <label>Badtid
         <select id="timeSlot">
-          <option value="best">Bästa tiden</option>
+          <option value="best">Dagtid 10-20</option>
           <option value="morning">Förmiddag 08-11</option>
           <option value="midday">Mitt på dagen 11-14</option>
           <option value="afternoon">Eftermiddag 14-17</option>
@@ -668,7 +668,7 @@
       ystad: { name: "Ystad", lat: 55.429, lon: 13.82 }
     };
     const TIME_SLOTS = {
-      best: { label: "Bästa tiden", start: 10, end: 20 },
+      best: { label: "Dagtid", start: 10, end: 20 },
       morning: { label: "Förmiddag", start: 8, end: 11 },
       midday: { label: "Mitt på dagen", start: 11, end: 14 },
       afternoon: { label: "Eftermiddag", start: 14, end: 17 },
@@ -676,8 +676,6 @@
     };
     const THUNDER_CODES = new Set([95, 96, 99]);
     const RAIN_CODES = new Set([51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82]);
-    const DEFAULT_MAX_DRIVE = 999;
-    const DEFAULT_STAY_HOURS = 3;
     const PERFECT_WATER_MIN = 20;
     const PERFECT_AIR_MIN = 24;
     const PERFECT_WIND_MAX = 6;
@@ -1354,7 +1352,7 @@
       }
       if (row.waterSource === "HaV vattenprognos") return `HaV prognos ${row.waterSourceTime || ""}`.trim();
       if (row.waterSource === "HaV dygnsprognos") return `HaV dygnsprognos ${row.waterSourceTime || ""}`.trim();
-      if (row.waterSource === "Open-Meteo Marine") return `Marine ${dateOnly(row.waterSourceTime)}`;
+      if (row.waterSource === "Open-Meteo Marine") return `Open-Meteo Marine ${row.waterSourceTime || ""}`.trim();
       return row.waterSource || "Saknas";
     }
 
@@ -1407,14 +1405,12 @@
       };
     }
 
-    function weatherWindow(beach, dayIndex, drive, stayHours, timeSlot = "best") {
+    function weatherWindow(beach, dayIndex, timeSlot = "best") {
       const hourly = beach.weather?.hourly;
       if (!hourly?.time) return null;
       const now = new Date();
       const range = arrivalRange(dayIndex, timeSlot);
       const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() + dayIndex, 0, 0, 0);
-      const earliest = dayIndex === 0 ? new Date(Math.max(now.getTime() + drive * 60000, range.earliest.getTime())) : range.earliest;
-      if (earliest > range.latest) return null;
       const allItems = hourly.time.map((time, i) => ({
         time: new Date(time),
         air: hourly.temperature_2m?.[i],
@@ -1424,28 +1420,23 @@
         wind: hourly.wind_speed_10m?.[i],
         gust: hourly.wind_gusts_10m?.[i]
       }));
-      let best = null;
-      for (let t = new Date(earliest); t <= range.latest; t.setHours(t.getHours() + 1)) {
-        const end = new Date(t.getTime() + stayHours * 3600000);
-        const items = allItems.filter((x) => x.time >= t && x.time < end);
-        if (items.length < stayHours) continue;
-        const rain = items.reduce((sum, x) => sum + (x.rain || 0), 0);
-        const preRain = allItems
-          .filter((x) => x.time >= dayStart && x.time < t)
-          .reduce((sum, x) => sum + (x.rain || 0), 0);
-        const thunder = items.some((x) => THUNDER_CODES.has(x.code));
-        const rainyCode = items.some((x) => RAIN_CODES.has(x.code));
-        const weatherCode = worstWeatherCode(items.map((x) => x.code));
-        const cloud = maxFinite(items.map((x) => x.cloud));
-        const air = maxFinite(items.map((x) => x.air));
-        const wind = maxFinite(items.map((x) => x.wind));
-        const gust = maxFinite(items.map((x) => x.gust));
-        if (!Number.isFinite(air)) continue;
-        const candidate = { arrive: new Date(t), leave: end, air, rain, preRain, thunder, rainyCode, weatherCode, cloud, wind, gust };
-        candidate.weatherScore = scoreWeather(candidate);
-        if (!best || candidate.weatherScore > best.weatherScore) best = candidate;
-      }
-      return best;
+      const items = allItems.filter((x) => x.time >= range.earliest && x.time < range.latest);
+      if (!items.length) return null;
+      const rain = items.reduce((sum, x) => sum + (x.rain || 0), 0);
+      const preRain = allItems
+        .filter((x) => x.time >= dayStart && x.time < range.earliest)
+        .reduce((sum, x) => sum + (x.rain || 0), 0);
+      const thunder = items.some((x) => THUNDER_CODES.has(x.code));
+      const rainyCode = items.some((x) => RAIN_CODES.has(x.code));
+      const weatherCode = worstWeatherCode(items.map((x) => x.code));
+      const cloud = maxFinite(items.map((x) => x.cloud));
+      const air = maxFinite(items.map((x) => x.air));
+      const wind = maxFinite(items.map((x) => x.wind));
+      const gust = maxFinite(items.map((x) => x.gust));
+      if (!Number.isFinite(air)) return null;
+      const candidate = { arrive: range.earliest, leave: range.latest, air, rain, preRain, thunder, rainyCode, weatherCode, cloud, wind, gust };
+      candidate.weatherScore = scoreWeather(candidate);
+      return candidate;
     }
 
     function waveFor(beach, dayIndex, startHour, endHour) {
@@ -1504,37 +1495,18 @@
       return "Uppehåll";
     }
 
-    function hourOfDay(date) {
-      return date.getHours() + date.getMinutes() / 60;
-    }
-
-    function sunBathTimeScore(w) {
-      if (!w?.arrive || !w?.leave) return 50;
-      const arriveHour = hourOfDay(w.arrive);
-      const leaveHour = hourOfDay(w.leave);
-      const midHour = (arriveHour + leaveHour) / 2;
-      const middayScore = clamp(100 - Math.abs(midHour - 14.2) * 14, 0, 100);
-      const latePenalty = Math.max(0, arriveHour - 16) * 18 + Math.max(0, leaveHour - 18.5) * 12;
-      const earlyPenalty = Math.max(0, 10 - arriveHour) * 10;
-      return clamp(middayScore - latePenalty - earlyPenalty, 0, 100);
-    }
-
     function scoreWeather(w) {
       const airScore = clamp(100 - Math.abs((w.air || 0) - 25) * 6, 0, 100);
       const rainScore = w.thunder ? 0 : clamp(100 - (w.rain || 0) * 45 - (w.rainyCode ? 18 : 0), 0, 100);
       const windScore = clamp(100 - (w.wind || 0) * 10 - Math.max(0, (w.gust || 0) - 8.5) * 5, 0, 100);
       const cloudScore = Number.isFinite(w.cloud) ? clamp(100 - w.cloud * .75, 0, 100) : 60;
-      const timeScore = sunBathTimeScore(w);
-      return airScore * .30 + rainScore * .32 + windScore * .13 + cloudScore * .10 + timeScore * .15;
+      return airScore * .36 + rainScore * .36 + windScore * .16 + cloudScore * .12;
     }
 
-    function fallbackWeatherWindow(beach, dayIndex, drive, stayHours, timeSlot = "best") {
+    function fallbackWeatherWindow(beach, dayIndex, timeSlot = "best") {
       const now = new Date();
       const range = arrivalRange(dayIndex, timeSlot);
       const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() + dayIndex, 0, 0, 0);
-      const arrive = dayIndex === 0 ? new Date(Math.max(now.getTime() + drive * 60000, range.earliest.getTime())) : range.earliest;
-      if (arrive > range.latest) return null;
-      const leave = new Date(arrive.getTime() + stayHours * 3600000);
       const hourly = beach.weather?.hourly;
       if (hourly?.time) {
         const allItems = hourly.time.map((time, i) => ({
@@ -1546,11 +1518,11 @@
           wind: hourly.wind_speed_10m?.[i],
           gust: hourly.wind_gusts_10m?.[i]
         }));
-        const items = allItems.filter((x) => x.time >= arrive && x.time < leave);
+        const items = allItems.filter((x) => x.time >= range.earliest && x.time < range.latest);
         if (items.length) {
           const rain = items.reduce((sum, x) => sum + (x.rain || 0), 0);
           const preRain = allItems
-            .filter((x) => x.time >= dayStart && x.time < arrive)
+            .filter((x) => x.time >= dayStart && x.time < range.earliest)
             .reduce((sum, x) => sum + (x.rain || 0), 0);
           const thunder = items.some((x) => THUNDER_CODES.has(x.code));
           const rainyCode = items.some((x) => RAIN_CODES.has(x.code));
@@ -1560,15 +1532,15 @@
           const wind = maxFinite(items.map((x) => x.wind));
           const gust = maxFinite(items.map((x) => x.gust));
           if (Number.isFinite(air)) {
-            const candidate = { arrive, leave, air, rain, preRain, thunder, rainyCode, weatherCode, cloud, wind, gust, fallback: true };
+            const candidate = { arrive: range.earliest, leave: range.latest, air, rain, preRain, thunder, rainyCode, weatherCode, cloud, wind, gust, fallback: true };
             candidate.weatherScore = scoreWeather(candidate);
             return candidate;
           }
         }
       }
       return {
-        arrive,
-        leave,
+        arrive: range.earliest,
+        leave: range.latest,
         air: 16,
         rain: 0,
         preRain: 0,
@@ -1619,7 +1591,7 @@
     function scoreBeach(beach, cfg) {
       const from = STARTS[cfg.start];
       const drive = driveMinutes(from, beach);
-      const window = weatherWindow(beach, cfg.dayIndex, drive, cfg.stayHours, cfg.timeSlot) || fallbackWeatherWindow(beach, cfg.dayIndex, drive, cfg.stayHours, cfg.timeSlot);
+      const window = weatherWindow(beach, cfg.dayIndex, cfg.timeSlot) || fallbackWeatherWindow(beach, cfg.dayIndex, cfg.timeSlot);
       if (!window) return null;
       const water = bestWaterTemp(beach, cfg.dayIndex, window.arrive.getHours(), window.leave.getHours());
       const waterTemp = water.value;
@@ -1642,21 +1614,17 @@
       const history = classificationHistory(beach);
       const repeatedHistoryPenalty = history.repeatedWeak ? 14 : 0;
       const weakHistoryPenalty = clamp(weakClassificationPenalty(beach) + repeatedHistoryPenalty, 0, 45);
-      const drivePenalty = Math.max(0, drive - 75) * .18;
       const advicePenalty = beach.advice.length || qualityLower.includes("otjän") ? 180 : 0;
       const weatherFallbackPenalty = window.fallback ? 20 : 0;
       const currentQualityPenalty = sampleAge > 30 || qualityLower.includes("otillgänglig") ? 55 : 0;
       const samplePenalty = Number.isFinite(sampleAge) ? clamp((sampleAge - 14) * .65, 0, 35) : 35;
       const rainQualityPenalty = rainDownrankPenalty(window);
       const algaePenalty = algaeRiskPenalty(beach);
-      const rawScore = waterScore * .35 + airScore * .25 + rainScore * .20 + windScore * .10 + qScore * .10 + serviceScore - drivePenalty - advicePenalty - samplePenalty - rainQualityPenalty - missingServicePenalty - weakHistoryPenalty - weatherFallbackPenalty - currentQualityPenalty - algaePenalty;
+      const rawScore = waterScore * .35 + airScore * .25 + rainScore * .20 + windScore * .10 + qScore * .10 + serviceScore - advicePenalty - samplePenalty - rainQualityPenalty - missingServicePenalty - weakHistoryPenalty - weatherFallbackPenalty - currentQualityPenalty - algaePenalty;
       const perfectBlockers = perfectScoreBlockers(beach, window, waterTemp, qualityLabel, qScore);
       const scoreCap = perfectScoreCap(perfectBlockers);
       const finalScore = Math.min(clamp(rawScore, 0, 100), scoreCap);
       const excludeScore = finalScore - missingServicePenalty * 1.15 - weakHistoryPenalty * 1.45 - advicePenalty * .8 - repeatedHistoryPenalty - weatherFallbackPenalty - currentQualityPenalty * 2 - rainQualityPenalty * 1.8 - algaePenalty * 1.4;
-      const departAt = new Date(window.arrive.getTime() - drive * 60000);
-      const homeAt = new Date(window.leave.getTime() + drive * 60000);
-      const totalTripMinutes = drive * 2 + cfg.stayHours * 60;
       const breakdown = {
         waterScore,
         airScore,
@@ -1666,7 +1634,6 @@
         serviceBonus: serviceScore,
         missingServicePenalty,
         weakHistoryPenalty,
-        drivePenalty,
         advicePenalty,
         weatherFallbackPenalty,
         samplePenalty,
@@ -1677,7 +1644,7 @@
         scoreCap,
         perfectBlockers
       };
-      return { beach, drive, departAt, homeAt, totalTripMinutes, stayHours: cfg.stayHours, sampleAge, window, waterTemp, waterSource: water.source, waterSourceTime, waterSourceAgeHours, wave, services, history, breakdown, excludeScore, score: finalScore, quality: qualityLabel };
+      return { beach, drive, sampleAge, window, waterTemp, waterSource: water.source, waterSourceTime, waterSourceAgeHours, wave, services, history, breakdown, excludeScore, score: finalScore, quality: qualityLabel };
     }
 
     function cfg() {
@@ -1685,8 +1652,6 @@
         dayIndex: Number($("daySelect").value),
         timeSlot: $("timeSlot").value,
         start: $("startSelect").value,
-        maxDrive: DEFAULT_MAX_DRIVE,
-        stayHours: DEFAULT_STAY_HOURS,
         limit: 100,
         categoryFilter: $("categoryFilter").value,
         sortKeys: [$("sortPrimary").value, $("sortSecondary").value, $("sortTertiary").value].filter((key) => key && key !== "none"),
@@ -1710,8 +1675,6 @@
 
     function updateUrlState() {
       const params = new URLSearchParams(location.search);
-      params.delete("drive");
-      params.delete("stay");
       Object.entries(URL_FIELDS).forEach(([key, id]) => {
         const element = $(id);
         if (!element) return;
@@ -1728,10 +1691,6 @@
       });
       const next = `${location.pathname}${params.toString() ? `?${params}` : ""}`;
       history.replaceState(null, "", next);
-    }
-
-    function formatTime(date) {
-      return date.toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" });
     }
 
     const SORT_LABELS = {
@@ -1847,14 +1806,11 @@
       const evaluated = state.raw.map((beach) => scoreBeach(beach, options));
       const unscoredRemovedCount = evaluated.filter((row) => !row).length;
       const scorable = evaluated.filter(Boolean);
-      const driveExcludedCount = scorable.filter((row) => row.drive > options.maxDrive).length;
-      const scored = scorable
-        .filter((row) => row.drive <= options.maxDrive)
-        .sort((a, b) => b.excludeScore - a.excludeScore);
+      const scored = scorable.sort((a, b) => b.excludeScore - a.excludeScore);
       const keptRows = scored.slice(0, options.limit);
       const removedRows = scored.slice(options.limit);
       const rows = sortRows(keptRows, options.sortKeys).map((row) => ({ ...row }));
-      return { rows, scored, removedRows, unscoredRemovedCount, driveExcludedCount };
+      return { rows, scored, removedRows, unscoredRemovedCount };
     }
 
     function bestRowsByDay() {
@@ -1879,42 +1835,10 @@
       return `<div class="day-strip" aria-label="Jämför bad 1 till 3 dagar">${chips}</div>`;
     }
 
-    function bestRowsByStay() {
-      const current = cfg();
-      return [2, 3, 4].map((stayHours) => {
-        const ranking = evaluateRanking({ ...current, stayHours });
-        const visible = visibleRowsForFilters(ranking.rows);
-        return visible[0] ? { stayHours, row: visible[0] } : { stayHours, row: null };
-      });
-    }
-
-    function renderStayComparison() {
-      const options = bestRowsByStay();
-      const best = options.filter((item) => item.row).sort((a, b) => b.row.score - a.row.score)[0];
-      const chips = options.map(({ stayHours, row }) => {
-        if (!row) return `<div class="day-chip"><b>${stayHours} tim</b><span>Saknar komplett badfönster.</span></div>`;
-        const marker = best && best.stayHours === stayHours ? "Bästa längd: " : "";
-        return `<div class="day-chip"><b>${marker}${stayHours} tim · ${Math.round(row.score)} p</b><span>${escapeHtml(row.beach.name)}, åk ${formatTime(row.departAt)}, hemma ${formatTime(row.homeAt)}, ${round(row.window.rain)} mm regn.</span></div>`;
-      }).join("");
-      return `<div class="day-strip" aria-label="Jämför vistelse 2 till 4 timmar">${chips}</div>`;
-    }
-
-    function selectedTimeTooLate(options) {
-      if (options.dayIndex !== 0) return false;
-      const from = STARTS[options.start];
-      const beaches = state.raw.filter((beach) => options.categoryFilter === "all" || beachCategory(beach) === options.categoryFilter);
-      const drives = beaches.map((beach) => driveMinutes(from, beach)).filter(Number.isFinite);
-      const minDrive = drives.length ? Math.min(...drives) : 0;
-      return new Date(Date.now() + minDrive * 60000) > arrivalRange(options.dayIndex, options.timeSlot).latest;
-    }
-
     function noResultsReason(options, rows, visibleRows) {
       const rawMatches = state.raw.filter((beach) => rawBeachMatchesCurrentFilters(beach, options));
       if (!rawMatches.length && options.search) return `Ingen strand matchar sökningen "${options.search}".`;
       if (!rawMatches.length && options.categoryFilter !== "all") return `Inga ${categoryTitle(options.categoryFilter).toLowerCase()} matchar de här valen.`;
-      if (selectedTimeTooLate(options)) {
-        return `${timeSlotRangeLabel(options.timeSlot)} idag är redan för sent från ${STARTS[options.start].name}. Välj en senare badtid eller Imorgon.`;
-      }
       if (!rows.length) {
         return `Inga stränder hade komplett vattentemperatur och väderfönster för ${timeSlotRangeLabel(options.timeSlot).toLowerCase()} med de här valen.`;
       }
@@ -1937,16 +1861,14 @@
         <div class="best-block">
           <span class="pill">${title}: ${Math.round(row.score)} poäng</span>
           <h2>${escapeHtml(row.beach.name)}, ${escapeHtml(row.beach.municipality)}</h2>
-          <p>Åk ca ${formatTime(row.departAt)}, kom ca ${formatTime(row.window.arrive)}, stanna till ${formatTime(row.window.leave)} och var hemma ca ${formatTime(row.homeAt)}. Resan är ungefär ${row.drive} min enkel väg från ${STARTS[cfg().start].name}.</p>
+          <p>Visar väder för ${escapeHtml(timeSlotRangeLabel(cfg().timeSlot).toLowerCase())} ${dayLabel(cfg().dayIndex).toLowerCase()}. Resan är ungefär ${row.drive} min enkel väg från ${STARTS[cfg().start].name}.</p>
         </div>
         <div class="best-meta">
-          <span class="pill">Åk ${formatTime(row.departAt)}</span>
           <span class="pill">${round(row.waterTemp)} C vatten</span>
           <span class="pill">${round(row.window.air)} C luft</span>
           <span class="pill">${round(row.window.rain)} mm regn</span>
           <span class="pill">${row.window.thunder ? "Åskrisk" : "Ingen åska i prognosen"}</span>
           <span class="pill">${round(row.window.wind)} m/s vind</span>
-          <span class="pill">${Math.round(row.totalTripMinutes / 60 * 10) / 10} tim utflykt</span>
         </div>` : `
         <div>
           <span class="pill">${title}</span>
@@ -1957,8 +1879,7 @@
         ${winnerBlock(overall, "Överst i aktuell sortering")}
         ${sea && !sameBeach(sea, overall) ? winnerBlock(sea, "Överst bland havsstränder") : ""}
         ${lake && !sameBeach(lake, overall) ? winnerBlock(lake, "Överst bland sjöstränder") : ""}
-        ${renderDayComparison()}
-        ${renderStayComparison()}`;
+        ${renderDayComparison()}`;
     }
 
     function beachCategory(beach) {
@@ -2151,7 +2072,6 @@
         `svag historik -${round(b.weakHistoryPenalty)}`,
         `historik: ${row.history?.text || "saknas"}`,
         `väderfallback -${round(b.weatherFallbackPenalty || 0)}`,
-        `restidsstraff -${round(b.drivePenalty)}`,
         `prov-/regnrisk -${round(b.samplePenalty + b.rainQualityPenalty)}`,
         hasCurrentAlgaeBloom(row.beach) ? `algstraff -${round(b.algaePenalty || 0)}` : "",
         b.perfectBlockers?.length ? `100-spärr: ${b.perfectBlockers.join(", ")}` : "",
@@ -2268,9 +2188,6 @@
               <span class="pill ${klass}">${escapeHtml(row.quality)}</span>
               <span class="pill">${escapeHtml(categoryTitle(categoryKey))}</span>
               <span class="pill">Kvalitetsprov ${latestDate}</span>
-              <span class="pill">Åk ${formatTime(row.departAt)}</span>
-              <span class="pill">${formatTime(row.window.arrive)}-${formatTime(row.window.leave)}</span>
-              <span class="pill">Hemma ca ${formatTime(row.homeAt)}</span>
               <a class="pill" href="${routeUrl(b)}" target="_blank" rel="noreferrer">Vägbeskrivning</a>
               ${tags.map((tag) => `<span class="pill">${escapeHtml(tag)}</span>`).join("")}
             </div>
@@ -2303,7 +2220,6 @@
                   <div class="detail-box"><b>Kontakt</b>${escapeHtml(municipalityContact)}<br>${escapeHtml(supervisoryContact)}</div>
                   <div class="detail-box"><b>Plats</b>${round(b.lat, 5)}, ${round(b.lon, 5)} · <a href="${mapUrl(b)}" target="_blank" rel="noreferrer">Öppna karta</a> · <a href="${routeUrl(b)}" target="_blank" rel="noreferrer">Vägbeskrivning</a></div>
                 </div>
-                <p><b>Utflykt:</b> åk ungefär ${formatTime(row.departAt)}, ca ${row.drive} min dit, ${cfg().stayHours} timmars bad, ca ${row.drive} min hem. Total tid cirka ${Math.round(row.totalTripMinutes / 60 * 10) / 10} timmar, hemma ungefär ${formatTime(row.homeAt)}.</p>
               </div>
             </details>
           </div>
@@ -2316,7 +2232,7 @@
       }[ch]));
     }
 
-    function renderNotes(rows, allCount, removedRows = [], unscoredRemovedCount = 0, driveExcludedCount = 0) {
+    function renderNotes(rows, allCount, removedRows = [], unscoredRemovedCount = 0) {
       const visibleRows = visibleRowsForFilters(rows);
       const allVisibleRows = visibleRowsForFilters(rows, { includeAvoid: true });
       const avoidVisibleCount = allVisibleRows.length - visibleRows.length;
@@ -2346,7 +2262,6 @@
             ? "Reservlista används eftersom data.json, live-HaV och lokal cache saknades. Väder hämtas om möjligt, men prov- och historikdata kan vara ofullständig."
             : "Live-data hämtades vid sidladdningen.";
       const limitText = [
-        driveExcludedCount ? `${driveExcludedCount} ligger utanför valt restidsfilter` : "",
         unscoredRemovedCount ? `${unscoredRemovedCount} saknar vattentemperatur eller komplett badfönster` : "",
         removedCount ? `${removedCount} sorteras bort på kvalitet, service, historik och väder` : ""
       ].filter(Boolean).join("; ") || "inga extra bad behöver sorteras bort inom aktuellt filter";
@@ -2368,7 +2283,7 @@
         ranksByCategory.set(key, (ranksByCategory.get(key) || 0) + 1);
         row.categoryRank = ranksByCategory.get(key);
       });
-      const header = ["total_rank", "kategori_rank", "kategori", "strand", "kommun", "poang", "rankningsorsak", "vatten_c", "vatten_kalla", "vatten_kalla_tid", "luft_c", "regn_mm", "regn_fore_bad_mm", "vader", "aska", "vind_ms", "vagor_m", "restid_min", "ak_hemifran", "hemma_ca", "vagbeskrivning_url", "vatten_poang", "luft_poang", "regn_aska_poang", "vind_poang", "kvalitet_poang", "service_bonus", "saknad_service_straff", "svag_historik_straff", "upprepat_svag_historik", "historikbedomning", "provstatus", "restidsstraff", "kvalitetsstraff", "kvalitet", "servicekontroll", "service"].join(",");
+      const header = ["total_rank", "kategori_rank", "kategori", "strand", "kommun", "poang", "rankningsorsak", "vatten_c", "vatten_kalla", "vatten_kalla_tid", "luft_c", "regn_mm", "regn_fore_bad_mm", "vader", "aska", "vind_ms", "vagor_m", "restid_min", "vagbeskrivning_url", "vatten_poang", "luft_poang", "regn_aska_poang", "vind_poang", "kvalitet_poang", "service_bonus", "saknad_service_straff", "svag_historik_straff", "upprepat_svag_historik", "historikbedomning", "provstatus", "kvalitetsstraff", "kvalitet", "servicekontroll", "service"].join(",");
       const lines = rows.map((row, i) => [
         i + 1,
         row.categoryRank || i + 1,
@@ -2388,8 +2303,6 @@
         round(row.window.wind),
         Number.isFinite(row.wave) ? round(row.wave) : "",
         row.drive,
-        formatTime(row.departAt),
-        formatTime(row.homeAt),
         routeUrl(row.beach),
         Math.round(row.breakdown.waterScore),
         Math.round(row.breakdown.airScore),
@@ -2402,7 +2315,6 @@
         row.history?.repeatedWeak ? "ja" : "nej",
         row.history?.text || "",
         sampleStatus(row.beach, row.sampleAge),
-        round(row.breakdown.drivePenalty),
         round(row.breakdown.samplePenalty + row.breakdown.rainQualityPenalty),
         row.quality,
         serviceChecklist(row.services),
@@ -2427,14 +2339,14 @@
     function rankAndRender() {
       const options = cfg();
       const from = STARTS[options.start];
-      const { rows, scored, removedRows, unscoredRemovedCount, driveExcludedCount } = evaluateRanking(options);
+      const { rows, scored, removedRows, unscoredRemovedCount } = evaluateRanking(options);
       const visibleRows = visibleRowsForFilters(rows);
       const emptyReason = noResultsReason(options, rows, visibleRows);
       state.rows = rows;
       renderBest(visibleRows, emptyReason);
       renderRows(rows, emptyReason);
       renderMunicipalityOverview(rows);
-      renderNotes(rows, state.raw.length, removedRows, unscoredRemovedCount, driveExcludedCount);
+      renderNotes(rows, state.raw.length, removedRows, unscoredRemovedCount);
       buildCsv(visibleRows);
       $("sortSummary").textContent = `Visar bad med vattentemperatur och komplett badfönster för ${periodSummary(options.dayIndex, options.timeSlot)}. Sortering: ${sortSummaryText(options)}.`;
       $("countPill").textContent = resultCountText(visibleRows, rows);
