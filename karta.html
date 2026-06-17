@@ -214,6 +214,10 @@
       background: #f8fbfa;
     }
 
+    .fact.good { color: var(--good); background: #e3f5ec; border-color: #bce5ce; }
+    .fact.warn { color: var(--warn); background: #fff2cc; border-color: #f4d98a; }
+    .fact.bad { color: var(--bad); background: #ffe2e3; border-color: #f0b6ba; }
+
     .fact b {
       display: block;
       margin-bottom: 4px;
@@ -222,9 +226,20 @@
       text-transform: uppercase;
     }
 
+    .fact.good b, .fact.warn b, .fact.bad b { color: currentColor; }
+
     .fact span {
       font-size: 1.05rem;
       font-weight: 900;
+    }
+
+    .fact small {
+      display: block;
+      margin-top: 5px;
+      color: currentColor;
+      font-size: .82rem;
+      font-weight: 800;
+      line-height: 1.35;
     }
 
     .detail-grid {
@@ -573,10 +588,34 @@
       `;
     }
 
-    function bacteriaText(beach) {
-      const ecoli = beach.ecoli ?? "saknas";
-      const entero = beach.enterococci ?? "saknas";
-      return `E. coli ${ecoli}, enterokocker ${entero}`;
+    function bacteriaStatus(beach) {
+      const quality = normalizeText(beach.quality);
+      if (quality.includes("avrad") || quality.includes("otjan")) {
+        return {
+          kind: "bad",
+          text: "Otjänligt eller avrådan",
+          detail: "Välj en annan badplats."
+        };
+      }
+      if (quality.includes("anm")) {
+        return {
+          kind: "warn",
+          text: "Vattenkvalitet med anmärkning",
+          detail: "Förhöjda värden i senaste provet."
+        };
+      }
+      if (quality.includes("tjanligt")) {
+        return {
+          kind: "good",
+          text: "Bra vattenkvalitet",
+          detail: "Bakterievärdena är normala i senaste provet."
+        };
+      }
+      return {
+        kind: "warn",
+        text: "Vattenkvalitet okänd",
+        detail: "Aktuell bakteriebedömning saknas."
+      };
     }
 
     function renderSelected(beach) {
@@ -585,6 +624,7 @@
         return;
       }
       const quality = qualityKind(beach);
+      const bacteria = bacteriaStatus(beach);
       const typeClass = isInland(beach) ? "lake" : "sea";
       const services = toArray(beach.services);
       const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${beach.lat},${beach.lon}`)}`;
@@ -601,7 +641,7 @@
           <div class="fact"><b>Vattenkvalitet</b><span>${escapeHtml(beach.quality || "Uppgift saknas")}</span></div>
           <div class="fact"><b>Senaste prov</b><span>${escapeHtml(formatDate(beach.latestSampleDate))}</span></div>
           <div class="fact"><b>Alger</b><span>${escapeHtml(beach.algae || "Uppgift saknas")}</span></div>
-          <div class="fact"><b>Bakterier</b><span>${escapeHtml(bacteriaText(beach))}</span></div>
+          <div class="fact ${bacteria.kind}"><b>Bakterier</b><span>${escapeHtml(bacteria.text)}</span><small>${escapeHtml(bacteria.detail)}</small></div>
         </div>
 
         <div class="chip-row">
