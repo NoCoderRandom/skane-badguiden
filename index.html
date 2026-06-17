@@ -1142,10 +1142,9 @@
       add("Brygga", ["brygga", "badbrygga", "flytbrygga"]);
       add("Dusch", ["dusch"]);
       add("Parkering", ["parkering", "parkerings", "p-plats", "p plats", "bilparkering"]);
-      add("Tillgängligt", ["tillgänglig", "tillgänglighetsanpassad", "ramp", "handikapp", "rullstol"]);
       add("Livboj", ["livboj", "båtshake"]);
       toArray(beach.nearbyAmenities).forEach((item) => tags.push(item.label));
-      return [...new Set(tags)];
+      return [...new Set(tags)].filter((tag) => tag !== "Tillgängligt");
     }
 
     function latestAlgaeText(beach) {
@@ -1288,7 +1287,7 @@
     function serviceChecklist(services) {
       const hasToilet = services.includes("Toalett");
       const hasFood = services.includes("Kiosk") || services.includes("Restaurang");
-      const hasAccess = services.includes("Parkering") || services.includes("Brygga") || services.includes("Tillgängligt");
+      const hasAccess = services.includes("Parkering") || services.includes("Brygga");
       return [
         `Toalett: ${hasToilet ? "hittad" : "ej hittad"}`,
         `kiosk/restaurang: ${hasFood ? "hittad" : "ej hittad"}`,

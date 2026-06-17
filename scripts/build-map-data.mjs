@@ -73,9 +73,8 @@ function serviceTags(beach) {
   if (/brygga|badbrygga|badstege/.test(text)) tags.add("Brygga");
   if (/dusch/.test(text)) tags.add("Dusch");
   if (/parkering|parkeringsplats/.test(text)) tags.add("Parkering");
-  if (/tillgänglig|ramp|badru?llstol/.test(text)) tags.add("Tillgängligt");
   toArray(beach.nearbyAmenities).forEach((item) => {
-    if (item?.label) tags.add(item.label);
+    if (item?.label && item.label !== "Tillgängligt") tags.add(item.label);
   });
   return [...tags].sort((a, b) => a.localeCompare(b, "sv-SE"));
 }
