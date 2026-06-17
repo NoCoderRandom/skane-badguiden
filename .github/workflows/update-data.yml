@@ -3,7 +3,7 @@ name: Update beach data
 on:
   workflow_dispatch:
   schedule:
-    - cron: "12 */3 * * *"
+    - cron: "23 * * * *"
 
 permissions:
   contents: write
