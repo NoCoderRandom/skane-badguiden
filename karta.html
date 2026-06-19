@@ -395,9 +395,9 @@
         Vattenkvalitet
         <select id="qualityFilter">
           <option value="all">Alla</option>
-          <option value="ok">Tjänligt</option>
+          <option value="ok">Aktuellt tjänligt</option>
           <option value="warning">Varning/avrådan</option>
-          <option value="unknown">Uppgift saknas</option>
+          <option value="unknown">Saknar aktuell info</option>
         </select>
       </label>
       <button id="resetButton" class="secondary" type="button">Rensa</button>
@@ -463,6 +463,41 @@
         : String(value);
     }
 
+    function sampleYear(beach) {
+      const raw = String(beach.latestSampleDate || "");
+      const year = Number(raw.slice(0, 4));
+      return Number.isFinite(year) ? year : null;
+    }
+
+    function currentQualityYear() {
+      return new Date().getFullYear();
+    }
+
+    function hasCurrentQualityInfo(beach) {
+      const quality = normalizeText(beach.quality);
+      const year = sampleYear(beach);
+      return year === currentQualityYear()
+        && quality
+        && !quality.includes("saknas")
+        && !quality.includes("ej klassificerad");
+    }
+
+    function missingCurrentQualityInfo(beach) {
+      return !hasCurrentQualityInfo(beach);
+    }
+
+    function sampleAgeText(beach) {
+      const year = sampleYear(beach);
+      if (!year) return "Aktuellt prov saknas";
+      const currentYear = currentQualityYear();
+      if (year !== currentYear) return `Inget prov från ${currentYear}. Senaste prov ${formatDate(beach.latestSampleDate)}.`;
+      const quality = normalizeText(beach.quality);
+      if (!quality || quality.includes("saknas") || quality.includes("ej klassificerad")) {
+        return `Prov finns från ${currentYear}, men kvalitetsbedömning saknas.`;
+      }
+      return `Aktuellt prov från ${currentYear}.`;
+    }
+
     function formatDateTime(value) {
       if (!value) return "";
       const date = new Date(value);
@@ -482,7 +517,7 @@
       const quality = normalizeText(beach.quality);
       const algae = normalizeText(beach.algae);
       if (quality.includes("avrad") || quality.includes("otjan") || algae.includes("blomning") && !algae.includes("ingen")) return "bad";
-      if (!quality || quality.includes("saknas")) return "warn";
+      if (missingCurrentQualityInfo(beach)) return "warn";
       return "good";
     }
 
@@ -491,7 +526,7 @@
       if (filter === "all") return true;
       if (filter === "ok") return kind === "good";
       if (filter === "warning") return kind === "bad";
-      if (filter === "unknown") return kind === "warn";
+      if (filter === "unknown") return missingCurrentQualityInfo(beach);
       return true;
     }
 
@@ -509,7 +544,7 @@
     function markerStyle(beach, selected = false) {
       const sea = beach.type === "Hav";
       const kind = qualityKind(beach);
-      const color = kind === "bad" ? "#b23b42" : sea ? "#006b7d" : "#286148";
+      const color = kind === "bad" ? "#b23b42" : kind === "warn" ? "#9a6b00" : sea ? "#006b7d" : "#286148";
       return {
         radius: selected ? 10 : 6,
         color,
@@ -590,6 +625,13 @@
 
     function bacteriaStatus(beach) {
       const quality = normalizeText(beach.quality);
+      if (missingCurrentQualityInfo(beach)) {
+        return {
+          kind: "warn",
+          text: "Aktuell vattenkvalitet saknas",
+          detail: sampleAgeText(beach)
+        };
+      }
       if (quality.includes("avrad") || quality.includes("otjan")) {
         return {
           kind: "bad",
@@ -638,7 +680,7 @@
         </div>
 
         <div class="facts">
-          <div class="fact"><b>Vattenkvalitet</b><span>${escapeHtml(beach.quality || "Uppgift saknas")}</span></div>
+          <div class="fact ${quality === "warn" ? "warn" : ""}"><b>Vattenkvalitet</b><span>${escapeHtml(beach.quality || "Uppgift saknas")}</span><small>${escapeHtml(sampleAgeText(beach))}</small></div>
           <div class="fact"><b>Senaste prov</b><span>${escapeHtml(formatDate(beach.latestSampleDate))}</span></div>
           <div class="fact"><b>Alger</b><span>${escapeHtml(beach.algae || "Uppgift saknas")}</span></div>
           <div class="fact ${bacteria.kind}"><b>Bakterier</b><span>${escapeHtml(bacteria.text)}</span><small>${escapeHtml(bacteria.detail)}</small></div>
@@ -694,7 +736,9 @@
       }
       renderMarkers();
       renderSelected(state.byId.get(state.selectedId));
-      $("countPill").textContent = `${state.beaches.length} badplatser`;
+      $("countPill").textContent = state.filtered.length === state.beaches.length
+        ? `${state.beaches.length} badplatser`
+        : `${state.filtered.length} visas av ${state.beaches.length}`;
       if (fit && state.filtered.length) fitFiltered();
     }
 
