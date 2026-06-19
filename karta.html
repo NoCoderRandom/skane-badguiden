@@ -419,6 +419,8 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
   <script>
     const DATA_URL = "map-data.json";
+    const SOURCE_DATA_URL = "data.json";
+    const REMOTE_BASE_URL = "https://nocoderrandom.github.io/skane-badguiden/";
     const SKANE_CENTER = [55.93, 13.34];
 
     const state = {
@@ -432,7 +434,9 @@
       imageIndex: 0,
       generatedAt: "",
       sourceDataGeneratedAt: "",
-      imageSourceNote: ""
+      imageSourceNote: "",
+      dataLoadUrl: "",
+      usedFallbackData: false
     };
 
     const $ = (id) => document.getElementById(id);
@@ -511,6 +515,107 @@
       if (!raw) return "";
       if (/^https?:\/\//i.test(raw)) return raw;
       return `https://${raw.replace(/^\/+/, "")}`;
+    }
+
+    function cacheBustUrl(url) {
+      const target = new URL(url, location.href);
+      target.searchParams.set("v", String(Date.now()));
+      return target.href;
+    }
+
+    function dataCandidates(file) {
+      const urls = [file, `./${file}`];
+      const localRepoPath = `github-pages-skane-badguiden/${file}`;
+      if (location.hostname === "localhost" || location.hostname === "127.0.0.1") urls.push(localRepoPath);
+      urls.push(`${REMOTE_BASE_URL}${file}`);
+      return [...new Set(urls)];
+    }
+
+    async function fetchJsonFromCandidates(urls, label) {
+      const errors = [];
+      for (const url of urls) {
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          try {
+            const response = await fetch(cacheBustUrl(url), { cache: "reload" });
+            if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+            return { data: await response.json(), url };
+          } catch (error) {
+            errors.push(`${url}: ${error.message}`);
+            await new Promise((resolve) => setTimeout(resolve, attempt ? 500 : 150));
+          }
+        }
+      }
+      throw new Error(`Kunde inte hämta ${label}. ${errors.slice(-3).join(" | ")}`);
+    }
+
+    function stripText(value) {
+      return String(value || "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+    }
+
+    function dateOnly(value) {
+      if (!value) return null;
+      const date = new Date(value);
+      return Number.isFinite(date.getTime()) ? date.toISOString().slice(0, 10) : null;
+    }
+
+    function sourceQualityText(beach) {
+      if (toArray(beach.advice).length) return "Avrådan";
+      if (beach.latestResult?.sampleAssessIdText) return beach.latestResult.sampleAssessIdText;
+      return beach.profile?.lastFourClassifications?.[0]?.qualityClassIdText || "Uppgift saknas";
+    }
+
+    function sourceServiceTags(beach) {
+      const text = [
+        beach.description,
+        beach.profile?.summary,
+        beach.profile?.bathingWater?.description
+      ].filter(Boolean).join(" ").toLowerCase();
+      const tags = new Set();
+      if (/toalett|wc|dass/.test(text)) tags.add("Toalett");
+      if (/kiosk/.test(text)) tags.add("Kiosk");
+      if (/restaurang|café|cafe|servering|glass/.test(text)) tags.add("Restaurang");
+      if (/brygga|badbrygga|badstege/.test(text)) tags.add("Brygga");
+      if (/dusch/.test(text)) tags.add("Dusch");
+      if (/parkering|parkeringsplats/.test(text)) tags.add("Parkering");
+      return [...tags].sort((a, b) => a.localeCompare(b, "sv-SE"));
+    }
+
+    function mapBeachFromSource(beach) {
+      const latest = beach.latestResult || {};
+      const description = stripText([
+        beach.profile?.summary,
+        beach.profile?.bathingWater?.description,
+        beach.description
+      ].filter(Boolean).join(" ")).slice(0, 1100);
+      return {
+        id: beach.id,
+        name: beach.name,
+        municipality: beach.municipality,
+        municipalityUrl: beach.municipalityUrl || "",
+        lat: Number(String(beach.lat ?? "").replace(",", ".")),
+        lon: Number(String(beach.lon ?? "").replace(",", ".")),
+        type: beach.type || "",
+        description,
+        quality: sourceQualityText(beach),
+        latestSampleDate: dateOnly(latest.takenAt),
+        ecoli: latest.escherichiaColiCount ?? null,
+        enterococci: latest.intestinalEnterococciCount ?? null,
+        algae: latest.algalIdText || "Uppgift saknas",
+        services: sourceServiceTags(beach),
+        classifications: toArray(beach.profile?.lastFourClassifications).map((item) => `${item.year}: ${item.qualityClassIdText || "okänt"}`),
+        images: [],
+        imageCheckedAt: null
+      };
+    }
+
+    function mapDataFromSourceData(data) {
+      return {
+        schemaVersion: 1,
+        generatedAt: new Date().toISOString(),
+        sourceDataGeneratedAt: data.generatedAt || null,
+        imageSourceNote: "Reservläge: kartan byggdes direkt från badplatsdatan, därför visas inga verifierade bilder i detta läge.",
+        beaches: toArray(data.beaches).map(mapBeachFromSource)
+      };
     }
 
     function qualityKind(beach) {
@@ -743,9 +848,20 @@
     }
 
     async function loadData() {
-      const response = await fetch(DATA_URL, { cache: "no-store" });
-      if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
-      const data = await response.json();
+      let data;
+      let loadedFrom = "";
+      let usedFallback = false;
+      try {
+        const result = await fetchJsonFromCandidates(dataCandidates(DATA_URL), "kartdata");
+        data = result.data;
+        loadedFrom = result.url;
+      } catch (mapError) {
+        console.warn("Kartdata kunde inte hämtas, provar badplatsdata som reserv.", mapError);
+        const result = await fetchJsonFromCandidates(dataCandidates(SOURCE_DATA_URL), "badplatsdata");
+        data = mapDataFromSourceData(result.data);
+        loadedFrom = result.url;
+        usedFallback = true;
+      }
       state.beaches = toArray(data.beaches)
         .filter((beach) => Number.isFinite(Number(beach.lat)) && Number.isFinite(Number(beach.lon)))
         .sort((a, b) => String(a.name).localeCompare(String(b.name), "sv-SE"));
@@ -753,11 +869,13 @@
       state.generatedAt = data.generatedAt || "";
       state.sourceDataGeneratedAt = data.sourceDataGeneratedAt || "";
       state.imageSourceNote = data.imageSourceNote || "";
+      state.dataLoadUrl = loadedFrom;
+      state.usedFallbackData = usedFallback;
       $("statusPill").className = "pill good";
-      $("statusPill").textContent = "Kartdata laddad";
+      $("statusPill").textContent = usedFallback ? "Reservdata laddad" : "Kartdata laddad";
       $("sourceLine").innerHTML = `
         Källa: <a href="https://www.havochvatten.se/data-kartor-och-rapporter/data-och-statistik/data-och-apier/api-badplatser-och-badvatten.html" target="_blank" rel="noopener">HaV badplatsdata</a>.
-        Bilder: <a href="https://commons.wikimedia.org/wiki/Commons:API/MediaWiki" target="_blank" rel="noopener">Wikimedia Commons</a>, bara när koordinaten matchar badplatsen.
+        ${usedFallback ? "Reservläge utan bilddata." : `Bilder: <a href="https://commons.wikimedia.org/wiki/Commons:API/MediaWiki" target="_blank" rel="noopener">Wikimedia Commons</a>, bara när koordinaten matchar badplatsen.`}
         ${state.generatedAt ? `Kartdata skapad ${escapeHtml(formatDateTime(state.generatedAt))}.` : ""}
         ${state.sourceDataGeneratedAt ? `Badplatsdata från ${escapeHtml(formatDateTime(state.sourceDataGeneratedAt))}.` : ""}
       `;
