@@ -638,7 +638,7 @@
         <div class="section-title">
           <h2>Data</h2>
         </div>
-        <p class="small">HaV används för badplatser, kvalitet och vattenprognos. Open-Meteo används för väder, vind i m/s och vågor där marin data finns. OpenStreetMap används för service nära stranden, men service påverkar inte rankingen.</p>
+        <p class="small">HaV används för badplatser, kvalitet och vattenprognos. Kvalitetsprov räknas som aktuella i 12 månader; äldre eller ofullständiga prov rekommenderas inte. Open-Meteo används för väder, vind i m/s och vågor där marin data finns. OpenStreetMap används för service nära stranden, men service påverkar inte rankingen.</p>
         <div id="municipalityOverview" class="explain small">Kommunöversikt räknas efter laddning.</div>
         <hr>
         <div id="runNotes" class="explain"></div>
@@ -702,6 +702,7 @@
     const PERFECT_WATER_MIN = 20;
     const PERFECT_AIR_MIN = 24;
     const PERFECT_WIND_MAX = 6;
+    const QUALITY_MAX_AGE_DAYS = 365;
     const $ = (id) => document.getElementById(id);
     const state = { raw: [], rows: [], lastCsv: "", sourceMode: "live", cachedAt: null, skaneCount: 0, osmAmenityCount: 0, osmFailedBatches: 0 };
     const URL_FIELDS = {
@@ -1209,21 +1210,24 @@
       const age = daysSince(beach.latestResult?.takenAt);
       if (!beach.latestResult) return "Kvalitet otillgänglig";
       if (!Number.isFinite(age)) return "Kvalitet otillgänglig";
-      if (age > 30) return `Kvalitet otillgänglig (prov ${age} dagar gammalt)`;
+      if (age > QUALITY_MAX_AGE_DAYS) return `Kvalitet otillgänglig (prov äldre än 12 månader: ${age} dagar)`;
       const latest = beach.latestResult?.sampleAssessIdText;
-      if (latest) return latest;
-      const cls = classificationRows(beach)[0]?.qualityClassIdText;
-      return cls || "Ej hämtad";
+      if (!latest || /uppgift saknas|ej bedömt|ej hämtad/i.test(latest)) return "Kvalitet otillgänglig (bedömning saknas)";
+      return latest;
     }
 
     function qualityScore(beach) {
       const text = qualityText(beach).toLowerCase();
       if (beach.advice.length || text.includes("otjän") || text.includes("avrådan")) return 0;
       if (text.includes("otillgänglig") || text.includes("ej hämtad")) return 0;
-      if (text.includes("anmärkning") || text.includes("tillfredsställande")) return 55;
+      if (hasQualityRemark(text) || text.includes("tillfredsställande")) return 55;
       if (text.includes("god")) return 82;
       if (text.includes("utmärkt") || text.includes("tjänligt")) return 100;
       return 68;
+    }
+
+    function hasQualityRemark(value) {
+      return /anmärkning|\banm\.?/i.test(String(value || ""));
     }
 
     function bacteriaLevel(value, type) {
@@ -1242,10 +1246,20 @@
       return Math.max(0, Math.round((Date.now() - time) / 86400000));
     }
 
+    function hasCurrentQualityInfo(beach) {
+      const age = daysSince(beach.latestResult?.takenAt);
+      const assessment = String(beach.latestResult?.sampleAssessIdText || "").toLowerCase();
+      return Boolean(beach.latestResult)
+        && Number.isFinite(age)
+        && age <= QUALITY_MAX_AGE_DAYS
+        && Boolean(assessment)
+        && !/uppgift saknas|ej bedömt|ej hämtad|otillgänglig/.test(assessment);
+    }
+
     function qualityCaution(beach, window) {
       const notes = [];
       const age = daysSince(beach.latestResult?.takenAt);
-      if (Number.isFinite(age) && age > 21) notes.push(`senaste provet är ${age} dagar gammalt`);
+      if (Number.isFinite(age) && age > QUALITY_MAX_AGE_DAYS) notes.push(`senaste provet är äldre än 12 månader (${age} dagar)`);
       if (!Number.isFinite(age)) notes.push("provtagningsdatum saknas");
       if ((window?.rain || 0) >= 2) notes.push("regn under badfönstret kan försämra vatten nära utlopp och dagvatten");
       if ((window?.preRain || 0) >= 3) notes.push(`${round(window.preRain)} mm regn före badfönstret kan försämra vatten nära utlopp och dagvatten`);
@@ -1271,7 +1285,7 @@
       const sampleTemp = parseNumber(beach.latestResult?.waterTemp);
       if (beach.advice.length) flags.push("aktiv avrådan");
       if (!beach.latestResult) flags.push("senaste prov saknas");
-      if (Number.isFinite(row.sampleAge) && row.sampleAge > 21) flags.push(`prov ${row.sampleAge} dagar gammalt`);
+      if (Number.isFinite(row.sampleAge) && row.sampleAge > QUALITY_MAX_AGE_DAYS) flags.push(`prov äldre än 12 månader (${row.sampleAge} dagar)`);
       if (!classificationRows(beach).length) flags.push("klassningshistorik saknas");
       if (row.waterSource === "HaV vattenprognos" && isPlausibleWaterTemp(sampleTemp) && Number.isFinite(row.waterTemp) && Number.isFinite(row.sampleAge) && row.sampleAge <= 10 && sampleTemp - row.waterTemp >= 2.5) {
         flags.push(`ovanligt låg vattenprognos jämfört med prov ${round(sampleTemp)} C för ${row.sampleAge} dagar sedan`);
@@ -1620,11 +1634,10 @@
       const history = classificationHistory(beach);
       const advicePenalty = beach.advice.length || qualityLower.includes("otjän") ? 180 : 0;
       const weatherFallbackPenalty = window.fallback ? 20 : 0;
-      const currentQualityPenalty = !beach.latestResult || !Number.isFinite(sampleAge) || sampleAge > 30 || qualityLower.includes("otillgänglig") ? 55 : 0;
-      const samplePenalty = Number.isFinite(sampleAge) ? clamp((sampleAge - 14) * .65, 0, 35) : 35;
+      const currentQualityPenalty = hasCurrentQualityInfo(beach) && !qualityLower.includes("otillgänglig") ? 0 : 55;
       const rainQualityPenalty = rainDownrankPenalty(window);
       const algaePenalty = algaeRiskPenalty(beach);
-      const rawScore = waterScore * .30 + airScore * .25 + rainScore * .20 + windScore * .10 + qScore * .15 - advicePenalty - samplePenalty - rainQualityPenalty - weatherFallbackPenalty - currentQualityPenalty - algaePenalty;
+      const rawScore = waterScore * .30 + airScore * .25 + rainScore * .20 + windScore * .10 + qScore * .15 - advicePenalty - rainQualityPenalty - weatherFallbackPenalty - currentQualityPenalty - algaePenalty;
       const perfectBlockers = perfectScoreBlockers(beach, window, waterTemp, qualityLabel, qScore);
       const scoreCap = perfectScoreCap(perfectBlockers);
       const finalScore = Math.min(clamp(rawScore, 0, 100), scoreCap);
@@ -1636,7 +1649,6 @@
         qualityScore: qScore,
         advicePenalty,
         weatherFallbackPenalty,
-        samplePenalty,
         rainQualityPenalty,
         algaePenalty,
         currentQualityPenalty,
@@ -1737,6 +1749,7 @@
       return row.score <= 0
         || row.beach.advice.length > 0
         || quality.includes("otjän")
+        || quality.includes("otillgänglig")
         || hasCurrentAlgaeBloom(row.beach)
         || row.window?.thunder;
     }
@@ -2039,7 +2052,7 @@
         `vind ${Math.round(b.windScore)}/100 väger 10%`,
         `vattenkvalitet ${Math.round(b.qualityScore)}/100 väger 15%`,
         `väderfallback -${round(b.weatherFallbackPenalty || 0)}`,
-        `prov-/regnrisk -${round(b.samplePenalty + b.rainQualityPenalty)}`,
+        b.rainQualityPenalty > 0 ? `extra regnstraff -${round(b.rainQualityPenalty)}` : "",
         hasCurrentAlgaeBloom(row.beach) ? `algstraff -${round(b.algaePenalty || 0)}` : "",
         b.perfectBlockers?.length ? `100-spärr: ${b.perfectBlockers.join(", ")}` : "",
         `otillgänglig aktuell kvalitet -${round(b.currentQualityPenalty || 0)}`
@@ -2062,7 +2075,7 @@
       if ((b.currentQualityPenalty || 0) > 0) minus.push("aktuell kvalitet otillgänglig");
       if ((b.algaePenalty || 0) > 0) minus.push(algaeNote(row.beach));
       if (b.perfectBlockers?.length && Math.round(row.score) >= 80) minus.push(`100 spärras av ${b.perfectBlockers[0]}`);
-      if (Number.isFinite(row.sampleAge) && row.sampleAge > 21) minus.push(`prov ${row.sampleAge} dagar gammalt`);
+      if (Number.isFinite(row.sampleAge) && row.sampleAge > QUALITY_MAX_AGE_DAYS) minus.push(`prov äldre än 12 månader (${row.sampleAge} dagar)`);
       const positive = plus.slice(0, 3).join(", ") || "jämn totalpoäng";
       const negative = minus.slice(0, 2).join(", ");
       return negative ? `${positive}; dras ned av ${negative}` : positive;
@@ -2112,7 +2125,12 @@
 
     function beachCard(row, rank, categoryKey) {
       const b = row.beach;
-      const klass = row.beach.advice.length ? "bad" : row.quality.toLowerCase().includes("anmärkning") ? "warn" : "good";
+      const qualityLower = row.quality.toLowerCase();
+      const klass = row.beach.advice.length || qualityLower.includes("otjän")
+        ? "bad"
+        : hasQualityRemark(qualityLower) || qualityLower.includes("otillgänglig")
+          ? "warn"
+          : "good";
       const tags = row.services.length ? row.services : ["Service ej hittad i texten"];
       const latestDate = dateOnly(b.latestResult?.takenAt);
       const description = displayDescription(b);
@@ -2220,6 +2238,7 @@
         <p><b>Data uppdaterad:</b> ${formatDataTime(state.cachedAt)}${staleCacheText}. Sidan visad ${new Date().toLocaleString("sv-SE")}.</p>
         <p><b>Datastatus:</b> ${escapeHtml(sourceText)}</p>
         <p><b>Urval:</b> ${state.skaneCount || allCount} skånska badplatser hittades. Sidan rankar ${rows.length} badplatser; ${escapeHtml(dataCoverageText)}. Den visar/exporterar ${exportCount} stränder i aktuell vy: ${seaCount} havsstränder och ${lakeCount} sjöstränder/inlandsvatten.${avoidVisibleCount ? ` ${avoidVisibleCount} bad visas separat under Avstå idag.` : ""}</p>
+        <p><b>Vattenkvalitet:</b> senaste kvalitetsprovet får vara högst 12 månader gammalt. Äldre prov och prov utan kvalitetsbedömning visas som otillgängliga och rekommenderas inte.</p>
         <p><b>Filter och sortering:</b> ${filter === "all" ? "alla kategorier" : `${categoryTitle(filter)}`}, badtid ${escapeHtml(timeSlotLabel(cfg().timeSlot).toLowerCase())}${search ? `, sökning "${escapeHtml(search)}"` : ""}; sorterat på ${escapeHtml(sortSummaryText())}. ${visibleCount} kort syns.</p>
         <p><b>Säkerhet:</b> röda varningar visas direkt i listan för åska och otjänligt vatten. Lokal skyltning på plats gäller alltid.</p>`;
     }
@@ -2231,7 +2250,7 @@
         ranksByCategory.set(key, (ranksByCategory.get(key) || 0) + 1);
         row.categoryRank = ranksByCategory.get(key);
       });
-      const header = ["total_rank", "kategori_rank", "kategori", "strand", "kommun", "poang", "rankningsorsak", "vatten_c", "vatten_kalla", "vatten_kalla_tid", "luft_c", "regn_mm", "regn_fore_bad_mm", "vader", "aska", "vind_ms", "vagor_m", "restid_min", "vagbeskrivning_url", "vatten_poang", "luft_poang", "regn_aska_poang", "vind_poang", "kvalitet_poang", "provstatus", "kvalitetsstraff", "kvalitet", "servicekontroll", "service"].join(",");
+      const header = ["total_rank", "kategori_rank", "kategori", "strand", "kommun", "poang", "rankningsorsak", "vatten_c", "vatten_kalla", "vatten_kalla_tid", "luft_c", "regn_mm", "regn_fore_bad_mm", "vader", "aska", "vind_ms", "vagor_m", "restid_min", "vagbeskrivning_url", "vatten_poang", "luft_poang", "regn_aska_poang", "vind_poang", "kvalitet_poang", "provstatus", "extra_regnstraff", "kvalitet", "servicekontroll", "service"].join(",");
       const lines = rows.map((row, i) => [
         i + 1,
         row.categoryRank || i + 1,
@@ -2258,7 +2277,7 @@
         Math.round(row.breakdown.windScore),
         Math.round(row.breakdown.qualityScore),
         sampleStatus(row.beach, row.sampleAge),
-        round(row.breakdown.samplePenalty + row.breakdown.rainQualityPenalty),
+        round(row.breakdown.rainQualityPenalty),
         row.quality,
         serviceChecklist(row.services),
         row.services.join("|")
@@ -2274,8 +2293,8 @@
     function resultCountText(recommendedRows, rows) {
       const allVisibleRows = visibleRowsForFilters(rows, { includeAvoid: true });
       const avoidCount = allVisibleRows.length - recommendedRows.length;
-      if (avoidCount > 0) return `${allVisibleRows.length} rankade`;
-      return `${allVisibleRows.length} rankade`;
+      if (avoidCount > 0) return `${recommendedRows.length} rekommenderas · ${avoidCount} avstå`;
+      return `${recommendedRows.length} rekommenderas`;
     }
 
     function rankAndRender() {

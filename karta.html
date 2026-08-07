@@ -395,9 +395,9 @@
         Vattenkvalitet
         <select id="qualityFilter">
           <option value="all">Alla</option>
-          <option value="ok">Aktuellt tjänligt</option>
+          <option value="ok">Tjänligt prov inom 12 månader</option>
           <option value="warning">Varning/avrådan</option>
-          <option value="unknown">Saknar aktuell info</option>
+          <option value="unknown">Saknas/äldre än 12 månader</option>
         </select>
       </label>
       <button id="resetButton" class="secondary" type="button">Rensa</button>
@@ -422,6 +422,7 @@
     const SOURCE_DATA_URL = "data.json";
     const REMOTE_BASE_URL = "https://nocoderrandom.github.io/skane-badguiden/";
     const SKANE_CENTER = [55.93, 13.34];
+    const QUALITY_MAX_AGE_DAYS = 365;
 
     const state = {
       beaches: [],
@@ -467,23 +468,22 @@
         : String(value);
     }
 
-    function sampleYear(beach) {
-      const raw = String(beach.latestSampleDate || "");
-      const year = Number(raw.slice(0, 4));
-      return Number.isFinite(year) ? year : null;
-    }
-
-    function currentQualityYear() {
-      return new Date().getFullYear();
+    function sampleAgeDays(beach) {
+      if (!beach.latestSampleDate) return null;
+      const time = new Date(`${beach.latestSampleDate}T12:00:00`).getTime();
+      if (!Number.isFinite(time)) return null;
+      return Math.max(0, Math.floor((Date.now() - time) / 86400000));
     }
 
     function hasCurrentQualityInfo(beach) {
       const quality = normalizeText(beach.quality);
-      const year = sampleYear(beach);
-      return year === currentQualityYear()
+      const age = sampleAgeDays(beach);
+      return Number.isFinite(age)
+        && age <= QUALITY_MAX_AGE_DAYS
         && quality
         && !quality.includes("saknas")
-        && !quality.includes("ej klassificerad");
+        && !quality.includes("ej klassificerad")
+        && !quality.includes("ej bedomt");
     }
 
     function missingCurrentQualityInfo(beach) {
@@ -491,15 +491,14 @@
     }
 
     function sampleAgeText(beach) {
-      const year = sampleYear(beach);
-      if (!year) return "Aktuellt prov saknas";
-      const currentYear = currentQualityYear();
-      if (year !== currentYear) return `Inget prov från ${currentYear}. Senaste prov ${formatDate(beach.latestSampleDate)}.`;
+      const age = sampleAgeDays(beach);
+      if (!Number.isFinite(age)) return "Kvalitetsprov saknas";
+      if (age > QUALITY_MAX_AGE_DAYS) return `Äldre än 12 månader. Senaste prov ${formatDate(beach.latestSampleDate)} (${age} dagar).`;
       const quality = normalizeText(beach.quality);
       if (!quality || quality.includes("saknas") || quality.includes("ej klassificerad")) {
-        return `Prov finns från ${currentYear}, men kvalitetsbedömning saknas.`;
+        return `Prov ${formatDate(beach.latestSampleDate)}, men kvalitetsbedömning saknas.`;
       }
-      return `Aktuellt prov från ${currentYear}.`;
+      return `Prov ${formatDate(beach.latestSampleDate)} (${age} dagar), inom 12 månader.`;
     }
 
     function formatDateTime(value) {
@@ -623,6 +622,7 @@
       const algae = normalizeText(beach.algae);
       if (quality.includes("avrad") || quality.includes("otjan") || algae.includes("blomning") && !algae.includes("ingen")) return "bad";
       if (missingCurrentQualityInfo(beach)) return "warn";
+      if (quality.includes("anm")) return "warn";
       return "good";
     }
 
@@ -630,7 +630,7 @@
       const kind = qualityKind(beach);
       if (filter === "all") return true;
       if (filter === "ok") return kind === "good";
-      if (filter === "warning") return kind === "bad";
+      if (filter === "warning") return kind === "bad" || hasCurrentQualityInfo(beach) && normalizeText(beach.quality).includes("anm");
       if (filter === "unknown") return missingCurrentQualityInfo(beach);
       return true;
     }
@@ -733,7 +733,7 @@
       if (missingCurrentQualityInfo(beach)) {
         return {
           kind: "warn",
-          text: "Aktuell vattenkvalitet saknas",
+          text: "Vattenkvalitet saknas eller är för gammal",
           detail: sampleAgeText(beach)
         };
       }
@@ -785,7 +785,7 @@
         </div>
 
         <div class="facts">
-          <div class="fact ${quality === "warn" ? "warn" : ""}"><b>Vattenkvalitet</b><span>${escapeHtml(beach.quality || "Uppgift saknas")}</span><small>${escapeHtml(sampleAgeText(beach))}</small></div>
+          <div class="fact ${quality}"><b>Vattenkvalitet</b><span>${escapeHtml(beach.quality || "Uppgift saknas")}</span><small>${escapeHtml(sampleAgeText(beach))}</small></div>
           <div class="fact"><b>Senaste prov</b><span>${escapeHtml(formatDate(beach.latestSampleDate))}</span></div>
           <div class="fact"><b>Alger</b><span>${escapeHtml(beach.algae || "Uppgift saknas")}</span></div>
           <div class="fact ${bacteria.kind}"><b>Bakterier</b><span>${escapeHtml(bacteria.text)}</span><small>${escapeHtml(bacteria.detail)}</small></div>
