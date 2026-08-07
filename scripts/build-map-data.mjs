@@ -7,16 +7,35 @@ const dataPath = resolve(root, "data.json");
 const previousPath = resolve(root, "map-data.json");
 const outputPath = resolve(root, "map-data.json");
 const COMMONS_API = "https://commons.wikimedia.org/w/api.php";
-const COMMONS_RADIUS_METERS = 260;
-const COMMONS_LIMIT = 8;
-const COMMONS_DELAY_MS = 350;
+const IMAGE_SEARCH_VERSION = 7;
+const COMMONS_EXACT_RADIUS_METERS = 350;
+const COMMONS_FALLBACK_RADIUS_METERS = 1800;
+const COMMONS_LIMIT = 20;
+const COMMONS_DELAY_MS = 900;
+const IMAGE_BATCH_SIZE = 3;
+const CHECKPOINT_EVERY = 15;
+const EMPTY_IMAGE_RECHECK_DAYS = 30;
+const FILLED_IMAGE_RECHECK_DAYS = 180;
 let commonsRateLimited = false;
+let commonsRequestQueue = Promise.resolve();
+let lastCommonsRequestAt = 0;
+
+const GENERIC_BEACH_WORDS = new Set([
+  "bad", "badet", "badplats", "badplatsen", "badhus", "brygga", "bryggan",
+  "camping", "havsbad", "hamn", "hamnen", "norra", "sodra", "strand",
+  "stranden", "ostra", "vastra"
+]);
+const AMBIGUOUS_UNLOCATED_BEACHES = new Set([
+  "kallsjon", "lilleskog", "tallbacken", "viks fiskelage", "vastersjon"
+]);
+const IRRELEVANT_WORDS = /kettlebell|museum|kyrka|church|school|skola|exhibition|utstallning|monument|minneskors|memorial|helikopter|helicopter|busshallplats|bus stop|tegelbruk|vattentorn|water tower|fabriksbyggnad|factory|bruksomrade|camera lens|canon ef|ponnyridning|restaurang|restaurant|hotell|hotel|horsal|hamntorg|pumphus|mandrup|somateria|thalasseus|seal|klocka|bell|malning|painting|aftenstemning|scout|wikivoyage banner|bassang|rasthaus|skepparpsgarden/i;
 
 function toArray(value) {
   return Array.isArray(value) ? value : [];
 }
 
 function parseNumber(value) {
+  if (value === null || value === undefined || String(value).trim() === "") return null;
   const n = Number(String(value ?? "").replace(",", "."));
   return Number.isFinite(n) ? n : null;
 }
@@ -27,6 +46,64 @@ function stripTags(value) {
 
 function compactText(value, max = 900) {
   return stripTags(value).slice(0, max);
+}
+
+function normalizeText(value) {
+  return String(value || "")
+    .toLocaleLowerCase("sv-SE")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function beachNameTokens(beach) {
+  return normalizeText(beach.name)
+    .split(/\s+/)
+    .filter((word) => word.length >= 4 && !GENERIC_BEACH_WORDS.has(word));
+}
+
+function titleStem(value) {
+  return normalizeText(String(value || "").replace(/\.[a-z0-9]{2,5}$/i, ""));
+}
+
+function sceneMatch(value) {
+  return normalizeText(value).split(/\s+/).some((word) => (
+    /strand|beach|brygg|pier|jetty|coast|kust|havsbad|hamn|harbour|harbor|haven|sunset|sunrise|seascape|wave|oresund|skaldervik|shore|klipp/.test(word)
+    || /sjon$/.test(word)
+    || /^(hav|sjo|lake|sea|sand|badstrand|badbild|badliv|badplats)$/.test(word)
+  ));
+}
+
+function nameEvidence(title, beach) {
+  const normalizedTitle = normalizeText(title);
+  const tokens = beachNameTokens(beach);
+  const matchedTokens = tokens.filter((token) => normalizedTitle.includes(token));
+  const longestTokenLength = Math.max(0, ...tokens.map((token) => token.length));
+  const primaryMatch = matchedTokens.some((token) => token.length === longestTokenLength);
+  const normalizedName = normalizeText(beach.name);
+  const normalizedMunicipality = normalizeText(beach.municipality);
+  return {
+    tokens,
+    matchedTokens,
+    nameMatches: matchedTokens.length,
+    primaryMatch,
+    exactTitle: titleStem(title) === normalizedName,
+    exactPrimaryTitle: matchedTokens.some((token) => titleStem(title) === token),
+    municipalityMatch: normalizedMunicipality.length >= 4 && normalizedTitle.includes(normalizedMunicipality)
+  };
+}
+
+function reliableNameMatch(title, beach, distanceMeters) {
+  const evidence = nameEvidence(title, beach);
+  if (!evidence.nameMatches || !evidence.primaryMatch) return false;
+  if (Number.isFinite(distanceMeters)) return distanceMeters <= COMMONS_FALLBACK_RADIUS_METERS;
+  if (AMBIGUOUS_UNLOCATED_BEACHES.has(normalizeText(beach.name)) && !evidence.municipalityMatch) return false;
+  return sceneMatch(title)
+    || evidence.exactTitle
+    || evidence.exactPrimaryTitle
+    || evidence.municipalityMatch
+    || evidence.tokens.length > 1 && evidence.nameMatches === evidence.tokens.length;
 }
 
 function uniqueTextParts(parts) {
@@ -131,7 +208,8 @@ function mapBeach(beach, imageRecord) {
     },
     contact: contactInfo(beach),
     images: toArray(imageRecord?.images).slice(0, 4),
-    imageCheckedAt: imageRecord?.imageCheckedAt || null
+    imageCheckedAt: imageRecord?.imageCheckedAt || null,
+    imageSearchVersion: imageRecord?.imageSearchVersion || null
   };
 }
 
@@ -151,59 +229,174 @@ async function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function fetchCommonsImages(beach) {
-  if (commonsRateLimited) {
-    return { imageCheckedAt: null, images: [] };
+function imageAgeDays(value) {
+  const time = value ? new Date(value).getTime() : NaN;
+  return Number.isFinite(time) ? Math.max(0, (Date.now() - time) / 86400000) : Infinity;
+}
+
+function shouldRefreshImages(existing) {
+  if (!existing || existing.imageSearchVersion !== IMAGE_SEARCH_VERSION) return true;
+  const maxAge = toArray(existing.images).length ? FILLED_IMAGE_RECHECK_DAYS : EMPTY_IMAGE_RECHECK_DAYS;
+  return imageAgeDays(existing.imageCheckedAt) >= maxAge;
+}
+
+function candidateRelevance(page, beach, source) {
+  const info = page.imageinfo?.[0];
+  if (!info || !String(info.mime || "").startsWith("image/")) return null;
+  const title = String(page.title || "").replace(/^File:/, "");
+  const normalizedTitle = normalizeText(title);
+  if (!normalizedTitle || IRRELEVANT_WORDS.test(normalizedTitle)) return null;
+
+  const evidence = nameEvidence(title, beach);
+  const nameMatches = evidence.nameMatches;
+  const isScene = sceneMatch(normalizedTitle);
+  const distanceMeters = commonsDistanceMeters(page.coordinates, beach);
+  const exactDistance = Number.isFinite(distanceMeters) && distanceMeters <= COMMONS_EXACT_RADIUS_METERS;
+  const fallbackDistance = Number.isFinite(distanceMeters) && distanceMeters <= COMMONS_FALLBACK_RADIUS_METERS;
+
+  if (source === "coordinates" && (!exactDistance || !isScene && !nameMatches)) return null;
+  if (source === "name" && !reliableNameMatch(title, beach, distanceMeters)) return null;
+  if (source === "name" && Number.isFinite(distanceMeters) && !fallbackDistance) return null;
+
+  const score = nameMatches * 120
+    + (isScene ? 45 : 0)
+    + (source === "name" ? 25 : 0)
+    + (Number.isFinite(distanceMeters) ? Math.max(0, 35 - distanceMeters / 30) : 0);
+  return {
+    score,
+    image: {
+      title,
+      url: info.thumburl || info.url,
+      originalUrl: info.descriptionurl || "",
+      source: "Wikimedia Commons",
+      license: stripTags(info.extmetadata?.LicenseShortName?.value || ""),
+      author: stripTags(info.extmetadata?.Artist?.value || ""),
+      distanceMeters,
+      matchType: source
+    }
+  };
+}
+
+function existingImageIsRelevant(image, beach) {
+  const normalizedTitle = normalizeText(image?.title);
+  if (!normalizedTitle || IRRELEVANT_WORDS.test(normalizedTitle)) return false;
+  const nameMatches = beachNameTokens(beach).some((token) => normalizedTitle.includes(token));
+  const isScene = sceneMatch(normalizedTitle);
+  const distanceMeters = parseNumber(image.distanceMeters);
+  if (image.matchType === "name") return reliableNameMatch(image.title, beach, distanceMeters);
+  return Number.isFinite(distanceMeters)
+    && distanceMeters <= COMMONS_EXACT_RADIUS_METERS
+    && (nameMatches || isScene);
+}
+
+async function throttleCommons() {
+  const previous = commonsRequestQueue;
+  let release;
+  commonsRequestQueue = new Promise((resolve) => { release = resolve; });
+  await previous;
+  const waitMs = Math.max(0, COMMONS_DELAY_MS - (Date.now() - lastCommonsRequestAt));
+  if (waitMs) await sleep(waitMs);
+  lastCommonsRequestAt = Date.now();
+  release();
+}
+
+async function fetchCommonsPages(params) {
+  if (commonsRateLimited) return null;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    await throttleCommons();
+    const response = await fetch(`${COMMONS_API}?${params}`, {
+      headers: { "User-Agent": "skane-badguiden-map/2.0 (GitHub Pages data builder)" },
+      signal: AbortSignal.timeout(15000)
+    });
+    const retryable = response.status === 429 || response.status === 503;
+    if (retryable) {
+      const retryAfter = Number(response.headers.get("retry-after"));
+      const waitMs = Number.isFinite(retryAfter) && retryAfter > 0
+        ? retryAfter * 1000
+        : 4000 * (attempt + 1);
+      if (attempt === 3) {
+        commonsRateLimited = true;
+        throw new Error(`${response.status} ${response.statusText} efter fyra försök`);
+      }
+      console.warn(`Commons svarade ${response.status}; väntar ${Math.round(waitMs / 1000)} s före nytt försök.`);
+      await sleep(waitMs);
+      continue;
+    }
+    if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+    const data = await response.json();
+    if (data.error?.code === "maxlag") {
+      if (attempt === 3) throw new Error(`Commons maxlag efter fyra försök: ${data.error.info || "okänt fel"}`);
+      await sleep(4000 * (attempt + 1));
+      continue;
+    }
+    return Object.values(data.query?.pages || {});
   }
-  if (!Number.isFinite(beach.lat) || !Number.isFinite(beach.lon)) {
-    return { imageCheckedAt: new Date().toISOString(), images: [] };
-  }
-  const params = new URLSearchParams({
+  return [];
+}
+
+function commonImageParams() {
+  return {
     action: "query",
     format: "json",
     origin: "*",
-    generator: "geosearch",
-    ggsnamespace: "6",
-    ggscoord: `${beach.lat}|${beach.lon}`,
-    ggsradius: String(COMMONS_RADIUS_METERS),
-    ggslimit: String(COMMONS_LIMIT),
     prop: "imageinfo|coordinates",
     iiprop: "url|extmetadata|mime|size",
     iiurlwidth: "1200",
     iiurlheight: "760",
-    coprimary: "all"
-  });
+    coprimary: "all",
+    maxlag: "5"
+  };
+}
+
+async function fetchCommonsImages(beach) {
+  if (commonsRateLimited) return null;
+  if (!Number.isFinite(beach.lat) || !Number.isFinite(beach.lon)) {
+    return { imageCheckedAt: new Date().toISOString(), imageSearchVersion: IMAGE_SEARCH_VERSION, images: [] };
+  }
+
   try {
-    const response = await fetch(`${COMMONS_API}?${params}`, {
-      headers: { "User-Agent": "skane-badguiden-map/1.0 (GitHub Pages data builder)" }
+    const searchQuery = String(beach.name).replace(/[,/]/g, " ").replace(/\s+/g, " ").trim();
+    const searchParams = new URLSearchParams({
+      ...commonImageParams(),
+      generator: "search",
+      gsrnamespace: "6",
+      gsrlimit: String(COMMONS_LIMIT),
+      gsrsearch: searchQuery
     });
-    if (response.status === 429) commonsRateLimited = true;
-    if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
-    const data = await response.json();
-    const pages = Object.values(data.query?.pages || {});
-    const images = pages
-      .map((page) => {
-        const info = page.imageinfo?.[0];
-        if (!info || !String(info.mime || "").startsWith("image/")) return null;
-        const distanceMeters = commonsDistanceMeters(page.coordinates, beach);
-        if (!Number.isFinite(distanceMeters) || distanceMeters > COMMONS_RADIUS_METERS) return null;
-        return {
-          title: String(page.title || "").replace(/^File:/, ""),
-          url: info.thumburl || info.url,
-          originalUrl: info.descriptionurl || "",
-          source: "Wikimedia Commons",
-          license: stripTags(info.extmetadata?.LicenseShortName?.value || ""),
-          author: stripTags(info.extmetadata?.Artist?.value || ""),
-          distanceMeters
-        };
+    const searchPages = await fetchCommonsPages(searchParams);
+    if (searchPages === null) return null;
+    const candidates = toArray(searchPages).map((page) => candidateRelevance(page, beach, "name")).filter(Boolean);
+
+    if (candidates.length < 4 && !commonsRateLimited) {
+      const geoParams = new URLSearchParams({
+        ...commonImageParams(),
+        generator: "geosearch",
+        ggsnamespace: "6",
+        ggscoord: `${beach.lat}|${beach.lon}`,
+        ggsradius: String(COMMONS_EXACT_RADIUS_METERS),
+        ggslimit: String(COMMONS_LIMIT)
+      });
+      const geoPages = await fetchCommonsPages(geoParams);
+      if (geoPages === null && !candidates.length) return null;
+      candidates.push(...toArray(geoPages).map((page) => candidateRelevance(page, beach, "coordinates")).filter(Boolean));
+    }
+
+    const seen = new Set();
+    const images = candidates
+      .sort((a, b) => b.score - a.score || (a.image.distanceMeters ?? Infinity) - (b.image.distanceMeters ?? Infinity))
+      .filter(({ image }) => {
+        const key = image.originalUrl || image.url || normalizeText(image.title);
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
       })
+      .map(({ image }) => image)
       .filter(Boolean)
-      .sort((a, b) => a.distanceMeters - b.distanceMeters)
       .slice(0, 4);
-    return { imageCheckedAt: new Date().toISOString(), images };
+    return { imageCheckedAt: new Date().toISOString(), imageSearchVersion: IMAGE_SEARCH_VERSION, images };
   } catch (error) {
     console.warn(`Commons image lookup failed for ${beach.name}: ${error.message}`);
-    return { imageCheckedAt: null, images: [] };
+    return null;
   }
 }
 
@@ -212,6 +405,7 @@ async function main() {
   const previous = JSON.parse(await readFile(previousPath, "utf8").catch(() => "null"));
   const previousImages = new Map(toArray(previous?.beaches).map((beach) => [beach.id, {
     imageCheckedAt: beach.imageCheckedAt || null,
+    imageSearchVersion: beach.imageSearchVersion || null,
     images: toArray(beach.images)
   }]));
   const imageRecords = new Map(previousImages);
@@ -220,28 +414,71 @@ async function main() {
     .filter((beach) => beach.id && Number.isFinite(parseNumber(beach.lat)) && Number.isFinite(parseNumber(beach.lon)))
     .sort((a, b) => String(a.name).localeCompare(String(b.name), "sv-SE"));
 
-  for (const beach of beaches) {
-    const existing = imageRecords.get(beach.id);
-    if (existing?.imageCheckedAt) continue;
-    imageRecords.set(beach.id, await fetchCommonsImages(beach));
-    if (commonsRateLimited) break;
-    await sleep(COMMONS_DELAY_MS);
-  }
-
-  const payload = {
-    schemaVersion: 1,
-    generatedAt: new Date().toISOString(),
-    sourceDataGeneratedAt: data.generatedAt || null,
-    source: "HaV badplatsdata, lokal cache och verifierade koordinatnära Wikimedia Commons-bilder där sådana hittades",
-    imageSourceNote: `Bilder hämtas endast från Wikimedia Commons när filens koordinat ligger inom ${COMMONS_RADIUS_METERS} meter från badplatsens koordinat. Saknas verifierad bild visas ingen bild.`,
-    count: beaches.length,
-    beaches: beaches.map((beach) => mapBeach(beach, imageRecords.get(beach.id)))
+  const makePayload = () => ({
+      schemaVersion: 2,
+      generatedAt: new Date().toISOString(),
+      sourceDataGeneratedAt: data.generatedAt || null,
+      source: "HaV badplatsdata, lokal cache och relevanskontrollerade Wikimedia Commons-bilder där sådana hittades",
+      imageSourceNote: `Bilder hämtas från Wikimedia Commons. Koordinatträffar måste ligga inom ${COMMONS_EXACT_RADIUS_METERS} meter och visa strand- eller badmiljö. Namnträffar måste matcha badplatsens namn och får ligga högst ${COMMONS_FALLBACK_RADIUS_METERS} meter bort när bildkoordinat finns. Saknas en säker träff visas ingen bild.`,
+      count: beaches.length,
+      beaches: beaches.map((beach) => mapBeach(beach, imageRecords.get(beach.id)))
+    });
+  const writePayload = async () => {
+    const payload = makePayload();
+    await mkdir(dirname(outputPath), { recursive: true });
+    await writeFile(outputPath, `${JSON.stringify(payload)}\n`, "utf8");
+    return payload;
   };
 
-  await mkdir(dirname(outputPath), { recursive: true });
-  await writeFile(outputPath, `${JSON.stringify(payload)}\n`, "utf8");
+  const targets = beaches.filter((beach) => shouldRefreshImages(imageRecords.get(beach.id)));
+  let processed = 0;
+  for (let start = 0; start < targets.length; start += IMAGE_BATCH_SIZE) {
+    const batch = targets.slice(start, start + IMAGE_BATCH_SIZE);
+    await Promise.all(batch.map(async (beach) => {
+      const existing = imageRecords.get(beach.id);
+      let rejectedByNewRules = false;
+      if (existing?.imageSearchVersion !== IMAGE_SEARCH_VERSION) {
+        const oldImages = toArray(existing?.images);
+        const filtered = oldImages
+          .filter((image) => existingImageIsRelevant(image, beach))
+          .map((image) => ({
+            ...image,
+            matchType: image.matchType || (Number.isFinite(parseNumber(image.distanceMeters)) ? "coordinates" : "name")
+          }))
+          .slice(0, 4);
+        if (filtered.length || !oldImages.length) {
+          imageRecords.set(beach.id, {
+            imageCheckedAt: new Date().toISOString(),
+            imageSearchVersion: IMAGE_SEARCH_VERSION,
+            images: filtered
+          });
+          return;
+        }
+        rejectedByNewRules = oldImages.length > 0;
+      }
+      const refreshed = await fetchCommonsImages(beach);
+      if (refreshed) {
+        imageRecords.set(beach.id, refreshed);
+      } else if (rejectedByNewRules || !existing) {
+        imageRecords.set(beach.id, {
+          imageCheckedAt: new Date().toISOString(),
+          imageSearchVersion: IMAGE_SEARCH_VERSION,
+          images: []
+        });
+      } else {
+        imageRecords.set(beach.id, {
+          ...existing,
+          imageCheckedAt: new Date().toISOString()
+        });
+      }
+    }));
+    processed += batch.length;
+    if (processed % CHECKPOINT_EVERY === 0) await writePayload();
+  }
+
+  const payload = await writePayload();
   const imageCount = payload.beaches.reduce((sum, beach) => sum + beach.images.length, 0);
-  console.log(`Wrote ${payload.beaches.length} map beaches and ${imageCount} images to ${outputPath}`);
+  console.log(`Wrote ${payload.beaches.length} map beaches and ${imageCount} images to ${outputPath}; refreshed ${processed} image records`);
 }
 
 main().catch((error) => {

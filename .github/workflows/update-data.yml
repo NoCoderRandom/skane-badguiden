@@ -33,6 +33,9 @@ jobs:
       - name: Test quality age rule
         run: node scripts/test-quality-age.mjs
 
+      - name: Test map images
+        run: node scripts/test-map-images.mjs
+
       - name: Commit updated data
         run: |
           git config user.name "github-actions[bot]"

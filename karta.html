@@ -709,10 +709,12 @@
       const sourceLink = normalizeLink(image.originalUrl);
       const author = image.author ? ` · ${escapeHtml(image.author)}` : "";
       const license = image.license ? ` · ${escapeHtml(image.license)}` : "";
-      const distance = Number.isFinite(image.distanceMeters) ? ` · ${image.distanceMeters} m från badplatsens koordinat` : "";
+      const distance = Number.isFinite(image.distanceMeters)
+        ? ` · ${image.distanceMeters} m från badplatsens koordinat`
+        : image.matchType === "name" ? " · matchad mot badplatsens namn" : "";
       return `
         <figure>
-          <img src="${escapeHtml(normalizeLink(image.url))}" alt="${escapeHtml(beach.name)}">
+          <img id="beachImage" src="${escapeHtml(normalizeLink(image.url))}" alt="${escapeHtml(beach.name)}" loading="lazy" decoding="async">
           <figcaption>
             ${escapeHtml(image.title || beach.name)}${author}${license}${distance}
             ${sourceLink ? ` · <a href="${escapeHtml(sourceLink)}" target="_blank" rel="noopener">Wikimedia Commons</a>` : ""}
@@ -812,6 +814,12 @@
         state.imageIndex += 1;
         renderSelected(beach);
       });
+      $("beachImage")?.addEventListener("error", (event) => {
+        const message = document.createElement("div");
+        message.className = "image-empty";
+        message.textContent = "Bilden kunde inte laddas just nu.";
+        event.currentTarget.replaceWith(message);
+      }, { once: true });
     }
 
     function selectBeach(id, options = {}) {
@@ -875,7 +883,7 @@
       $("statusPill").textContent = usedFallback ? "Reservdata laddad" : "Kartdata laddad";
       $("sourceLine").innerHTML = `
         Källa: <a href="https://www.havochvatten.se/data-kartor-och-rapporter/data-och-statistik/data-och-apier/api-badplatser-och-badvatten.html" target="_blank" rel="noopener">HaV badplatsdata</a>.
-        ${usedFallback ? "Reservläge utan bilddata." : `Bilder: <a href="https://commons.wikimedia.org/wiki/Commons:API/MediaWiki" target="_blank" rel="noopener">Wikimedia Commons</a>, bara när koordinaten matchar badplatsen.`}
+        ${usedFallback ? "Reservläge utan bilddata." : `Bilder: <a href="https://commons.wikimedia.org/wiki/Commons:API/MediaWiki" target="_blank" rel="noopener">Wikimedia Commons</a>, endast efter kontrollerad namn- eller koordinatmatchning.`}
         ${state.generatedAt ? `Kartdata skapad ${escapeHtml(formatDateTime(state.generatedAt))}.` : ""}
         ${state.sourceDataGeneratedAt ? `Badplatsdata från ${escapeHtml(formatDateTime(state.sourceDataGeneratedAt))}.` : ""}
       `;
